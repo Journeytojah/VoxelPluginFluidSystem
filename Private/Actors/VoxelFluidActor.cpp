@@ -155,10 +155,18 @@ void AVoxelFluidActor::ResetSimulation()
 
 void AVoxelFluidActor::AddFluidSource(const FVector& WorldPosition, float FlowRate)
 {
-	FluidSources.Add(WorldPosition, FlowRate);
-	
-	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Added fluid source at %s with flow rate %f"), 
-		   *WorldPosition.ToString(), FlowRate);
+	if (FluidSources.Contains(WorldPosition))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Fluid source already exists at %s, updating flow rate from %f to %f"), 
+			   *WorldPosition.ToString(), FluidSources[WorldPosition], FlowRate);
+		FluidSources[WorldPosition] = FlowRate;
+	}
+	else
+	{
+		FluidSources.Add(WorldPosition, FlowRate);
+		UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Added new fluid source at %s with flow rate %f"), 
+			   *WorldPosition.ToString(), FlowRate);
+	}
 }
 
 void AVoxelFluidActor::RemoveFluidSource(const FVector& WorldPosition)
@@ -220,8 +228,8 @@ void AVoxelFluidActor::TestFluidSpawn()
 			}
 		}
 		
-		const FVector SpawnWorldPos = GetActorLocation() + 
-									   FVector(TestX * CellSize, TestY * CellSize, TestZ * CellSize);
+		// Calculate the correct world position using the grid's origin
+		const FVector SpawnWorldPos = FluidGrid->GetWorldPositionFromCell(TestX, TestY, TestZ);
 		
 		UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Test fluid spawned at grid position (%d, %d, %d), world position %s"), 
 			   TestX, TestY, TestZ, *SpawnWorldPos.ToString());

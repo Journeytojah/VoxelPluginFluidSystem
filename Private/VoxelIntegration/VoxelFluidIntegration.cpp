@@ -165,7 +165,7 @@ void UVoxelFluidIntegration::DrawDebugFluid()
 				
 				if (FluidLevel > MinFluidToRender)
 				{
-					const FVector CellWorldPos = FluidGrid->GridOrigin + FluidGrid->GetWorldPositionFromCell(x, y, z);
+					const FVector CellWorldPos = FluidGrid->GetWorldPositionFromCell(x, y, z);
 					const float BoxSize = CellWorldSize * 0.9f * FluidLevel;
 					
 					const FColor FluidColor = FColor::MakeRedToGreenColorFromScalar(1.0f - FluidLevel);
