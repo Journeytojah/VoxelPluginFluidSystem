@@ -3,6 +3,8 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "CellularAutomata/CAFluidGrid.h"
+#include "VoxelStackLayer.h"
+#include "VoxelIntegration/VoxelTerrainSampler.h"
 #include "VoxelFluidIntegration.generated.h"
 
 class AActor;
@@ -31,6 +33,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
 	float SampleVoxelHeight(float WorldX, float WorldY);
+
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
+	void UpdateTerrainHeightsWithVoxelLayer();
 
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
 	void AddFluidAtWorldPosition(const FVector& WorldPosition, float Amount);
@@ -70,6 +75,15 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bEnableFlowVisualization = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain")
+	FVoxelStackLayer TerrainLayer;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain")
+	EVoxelSamplingMethod SamplingMethod = EVoxelSamplingMethod::VoxelQuery;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain")
+	bool bUseVoxelLayerSampling = true;
 
 private:
 	float TerrainUpdateTimer = 0.0f;

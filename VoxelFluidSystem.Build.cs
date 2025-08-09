@@ -13,7 +13,8 @@ public class VoxelFluidSystem : ModuleRules
 			"CoreUObject", 
 			"Engine", 
 			"InputCore", 
-			"EnhancedInput"
+			"EnhancedInput",
+			"Voxel"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { 

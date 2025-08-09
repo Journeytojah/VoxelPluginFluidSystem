@@ -98,7 +98,15 @@ void UVoxelFluidIntegration::UpdateTerrainHeights()
 {
 	if (!FluidGrid)
 		return;
+
+	// Use optimized voxel layer sampling if available
+	if (bUseVoxelLayerSampling && TerrainLayer.Layer != nullptr && SamplingMethod == EVoxelSamplingMethod::VoxelQuery)
+	{
+		UpdateTerrainHeightsWithVoxelLayer();
+		return;
+	}
 	
+	// Original individual sampling method
 	const FVector CurrentGridOrigin = FluidGrid->GridOrigin;
 	
 	for (int32 x = 0; x < GridResolutionX; ++x)
@@ -117,13 +125,76 @@ float UVoxelFluidIntegration::SampleVoxelHeight(float WorldX, float WorldY)
 {
 	FVector SampleLocation(WorldX, WorldY, 0);
 	
-	if (IsVoxelWorldValid())
+	UObject* WorldContext = IsVoxelWorldValid() ? static_cast<UObject*>(VoxelWorld) : static_cast<UObject*>(GetWorld());
+	
+	if (bUseVoxelLayerSampling && TerrainLayer.Layer != nullptr)
 	{
-		return UVoxelTerrainSampler::SampleTerrainHeightAtLocation(VoxelWorld, SampleLocation);
+		return UVoxelTerrainSampler::SampleTerrainHeightAtLocationWithLayer(WorldContext, SampleLocation, TerrainLayer, SamplingMethod);
 	}
 	else
 	{
-		return UVoxelTerrainSampler::SampleTerrainHeightAtLocation(GetWorld(), SampleLocation);
+		return UVoxelTerrainSampler::SampleTerrainHeightAtLocation(WorldContext, SampleLocation);
+	}
+}
+
+void UVoxelFluidIntegration::UpdateTerrainHeightsWithVoxelLayer()
+{
+	if (!FluidGrid || !bUseVoxelLayerSampling || TerrainLayer.Layer == nullptr)
+	{
+		UpdateTerrainHeights(); // Fallback to original method
+		return;
+	}
+
+	const FVector CurrentGridOrigin = FluidGrid->GridOrigin;
+	UObject* WorldContext = IsVoxelWorldValid() ? static_cast<UObject*>(VoxelWorld) : static_cast<UObject*>(GetWorld());
+
+	if (SamplingMethod == EVoxelSamplingMethod::VoxelQuery)
+	{
+		// Collect all sample positions for bulk query
+		TArray<FVector> SamplePositions;
+		TArray<TPair<int32, int32>> CellIndices; // Store x,y indices for each position
+		
+		SamplePositions.Reserve(GridResolutionX * GridResolutionY);
+		CellIndices.Reserve(GridResolutionX * GridResolutionY);
+
+		for (int32 x = 0; x < GridResolutionX; ++x)
+		{
+			for (int32 y = 0; y < GridResolutionY; ++y)
+			{
+				const FVector WorldPos = CurrentGridOrigin + FVector(x * CellWorldSize, y * CellWorldSize, 0);
+				SamplePositions.Add(WorldPos);
+				CellIndices.Add(TPair<int32, int32>(x, y));
+			}
+		}
+
+		// Use multi-query for better performance
+		TArray<float> Heights;
+		TArray<FVector> Positions;
+		
+		UVoxelTerrainSampler::SampleTerrainInBoundsWithLayer(
+			WorldContext,
+			CurrentGridOrigin,
+			CurrentGridOrigin + FVector(GridResolutionX * CellWorldSize, GridResolutionY * CellWorldSize, 0),
+			CellWorldSize,
+			TerrainLayer,
+			Heights,
+			Positions,
+			SamplingMethod
+		);
+
+		// Apply the heights to the fluid grid
+		if (Heights.Num() == CellIndices.Num())
+		{
+			for (int32 i = 0; i < CellIndices.Num(); ++i)
+			{
+				FluidGrid->SetTerrainHeight(CellIndices[i].Key, CellIndices[i].Value, Heights[i]);
+			}
+		}
+	}
+	else
+	{
+		// Fall back to individual sampling
+		UpdateTerrainHeights();
 	}
 }
 
