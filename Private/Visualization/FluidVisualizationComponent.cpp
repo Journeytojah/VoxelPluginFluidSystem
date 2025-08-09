@@ -125,7 +125,26 @@ void UFluidVisualizationComponent::DrawDebugFluid()
 				{
 					const FVector CellWorldPos = FluidGrid->GetWorldPositionFromCell(x, y, z);
 					const float BaseSize = FluidGrid->CellSize * 0.9f;
-					const float VerticalScale = FluidLevel;
+					
+					// First half of fill level (0 to 0.5) grows the bottom face
+					// Second half (0.5 to 1.0) grows the height
+					float HorizontalScale = 1.0f;
+					float VerticalScale = 1.0f;
+					
+					if (FluidLevel <= 0.5f)
+					{
+						// Grow bottom face from 0 to full size
+						HorizontalScale = FluidLevel * 2.0f; // Maps 0-0.5 to 0-1
+						VerticalScale = 0.05f; // Keep a minimal height for visibility
+					}
+					else
+					{
+						// Bottom face is full size, now grow height
+						HorizontalScale = 1.0f;
+						VerticalScale = (FluidLevel - 0.5f) * 2.0f; // Maps 0.5-1 to 0-1
+					}
+					
+					const float ScaledWidth = BaseSize * HorizontalScale;
 					const float ScaledHeight = BaseSize * VerticalScale;
 					
 					// Adjust position so box grows upward from bottom
@@ -133,7 +152,7 @@ void UFluidVisualizationComponent::DrawDebugFluid()
 					
 					const FColor DebugColor = FColor::MakeRedToGreenColorFromScalar(1.0f - FluidLevel);
 					
-					DrawDebugBox(GetWorld(), AdjustedPos, FVector(BaseSize * 0.5f, BaseSize * 0.5f, ScaledHeight * 0.5f), DebugColor, false, -1.0f, 0, 2.0f);
+					DrawDebugBox(GetWorld(), AdjustedPos, FVector(ScaledWidth * 0.5f, ScaledWidth * 0.5f, ScaledHeight * 0.5f), DebugColor, false, -1.0f, 0, 2.0f);
 				}
 			}
 		}
