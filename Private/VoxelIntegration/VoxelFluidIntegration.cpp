@@ -59,10 +59,11 @@ void UVoxelFluidIntegration::TickComponent(float DeltaTime, ELevelTick TickType,
 		}
 	}
 	
-	if (bDebugDrawCells)
-	{
-		DrawDebugFluid();
-	}
+	// Disable debug drawing from VoxelFluidIntegration to avoid conflicts with FluidVisualizationComponent
+	// if (bDebugDrawCells)
+	// {
+	//	DrawDebugFluid();
+	// }
 }
 
 void UVoxelFluidIntegration::InitializeFluidSystem(AActor* InVoxelWorld)

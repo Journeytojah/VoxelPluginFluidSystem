@@ -124,11 +124,16 @@ void UFluidVisualizationComponent::DrawDebugFluid()
 				if (FluidLevel > MinFluidLevelToRender)
 				{
 					const FVector CellWorldPos = FluidGrid->GetWorldPositionFromCell(x, y, z);
-					const float BoxSize = FluidGrid->CellSize * 0.9f * FluidLevel;
+					const float BaseSize = FluidGrid->CellSize * 0.9f;
+					const float VerticalScale = FluidLevel;
+					const float ScaledHeight = BaseSize * VerticalScale;
+					
+					// Adjust position so box grows upward from bottom
+					const FVector AdjustedPos = CellWorldPos + FVector(0, 0, (ScaledHeight - BaseSize) * 0.5f);
 					
 					const FColor DebugColor = FColor::MakeRedToGreenColorFromScalar(1.0f - FluidLevel);
 					
-					DrawDebugBox(GetWorld(), CellWorldPos, FVector(BoxSize * 0.5f), DebugColor, false, -1.0f, 0, 2.0f);
+					DrawDebugBox(GetWorld(), AdjustedPos, FVector(BaseSize * 0.5f, BaseSize * 0.5f, ScaledHeight * 0.5f), DebugColor, false, -1.0f, 0, 2.0f);
 				}
 			}
 		}
