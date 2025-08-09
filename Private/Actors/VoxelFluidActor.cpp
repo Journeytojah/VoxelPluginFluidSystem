@@ -52,6 +52,9 @@ void AVoxelFluidActor::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 	
+	// Update grid origin if actor has moved
+	UpdateGridOriginForMovement();
+	
 	if (bIsSimulating && FluidGrid)
 	{
 		const float ScaledDeltaTime = DeltaTime * SimulationSpeed;
@@ -71,13 +74,8 @@ void AVoxelFluidActor::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
 	
-	if (BoundsComponent)
-	{
-		const FVector BoundsExtent = FVector(GridSizeX * CellSize * 0.5f, 
-											  GridSizeY * CellSize * 0.5f, 
-											  GridSizeZ * CellSize * 0.5f);
-		BoundsComponent->SetBoxExtent(BoundsExtent);
-	}
+	CalculateGridBounds();
+	UpdateBounds();
 }
 
 void AVoxelFluidActor::InitializeFluidSystem()
@@ -87,12 +85,15 @@ void AVoxelFluidActor::InitializeFluidSystem()
 		FluidGrid = NewObject<UCAFluidGrid>(this, UCAFluidGrid::StaticClass());
 	}
 	
+	CalculateGridBounds();
+	
 	if (FluidGrid)
 	{
-		FluidGrid->InitializeGrid(GridSizeX, GridSizeY, GridSizeZ, CellSize);
+		FluidGrid->InitializeGrid(GridSizeX, GridSizeY, GridSizeZ, CellSize, CalculatedGridOrigin);
 		FluidGrid->FlowRate = FluidFlowRate;
 		FluidGrid->Viscosity = FluidViscosity;
 		FluidGrid->Gravity = GravityStrength;
+		FluidGrid->bAllowFluidEscape = bAllowFluidEscape;
 	}
 	
 	if (VoxelIntegration && FluidGrid)
@@ -116,13 +117,7 @@ void AVoxelFluidActor::InitializeFluidSystem()
 		VisualizationComponent->SetFluidGrid(FluidGrid);
 	}
 	
-	const FVector BoundsExtent = FVector(GridSizeX * CellSize * 0.5f, 
-										  GridSizeY * CellSize * 0.5f, 
-										  GridSizeZ * CellSize * 0.5f);
-	if (BoundsComponent)
-	{
-		BoundsComponent->SetBoxExtent(BoundsExtent);
-	}
+	UpdateBounds();
 }
 
 void AVoxelFluidActor::StartSimulation()
@@ -277,39 +272,99 @@ void AVoxelFluidActor::DrawDebugGrid()
 	if (!GetWorld() || !FluidGrid)
 		return;
 	
-	const FVector ActorLocation = GetActorLocation();
-	const float GridHeight = GridSizeZ * CellSize;
+	const FVector GridOrigin = FluidGrid->GridOrigin;
+	const float GridWidth = GridSizeX * CellSize;
+	const float GridHeight = GridSizeY * CellSize;
+	const float GridDepth = GridSizeZ * CellSize;
 	
+	// Draw grid lines in X direction
 	for (int32 x = 0; x <= GridSizeX; ++x)
 	{
 		const float XPos = x * CellSize;
-		const FVector LineStart = ActorLocation + FVector(XPos, 0, 0);
-		const FVector LineEnd = ActorLocation + FVector(XPos, GridSizeY * CellSize, 0);
+		const FVector LineStart = GridOrigin + FVector(XPos, 0, 0);
+		const FVector LineEnd = GridOrigin + FVector(XPos, GridHeight, 0);
 		
 		DrawDebugLine(GetWorld(), LineStart, LineEnd, FColor::White, false, -1.0f, 0, 1.0f);
-		DrawDebugLine(GetWorld(), LineStart + FVector(0, 0, GridHeight), 
-					  LineEnd + FVector(0, 0, GridHeight), FColor::White, false, -1.0f, 0, 1.0f);
+		DrawDebugLine(GetWorld(), LineStart + FVector(0, 0, GridDepth), 
+					  LineEnd + FVector(0, 0, GridDepth), FColor::White, false, -1.0f, 0, 1.0f);
 	}
 	
+	// Draw grid lines in Y direction
 	for (int32 y = 0; y <= GridSizeY; ++y)
 	{
 		const float YPos = y * CellSize;
-		const FVector LineStart = ActorLocation + FVector(0, YPos, 0);
-		const FVector LineEnd = ActorLocation + FVector(GridSizeX * CellSize, YPos, 0);
+		const FVector LineStart = GridOrigin + FVector(0, YPos, 0);
+		const FVector LineEnd = GridOrigin + FVector(GridWidth, YPos, 0);
 		
 		DrawDebugLine(GetWorld(), LineStart, LineEnd, FColor::White, false, -1.0f, 0, 1.0f);
-		DrawDebugLine(GetWorld(), LineStart + FVector(0, 0, GridHeight), 
-					  LineEnd + FVector(0, 0, GridHeight), FColor::White, false, -1.0f, 0, 1.0f);
+		DrawDebugLine(GetWorld(), LineStart + FVector(0, 0, GridDepth), 
+					  LineEnd + FVector(0, 0, GridDepth), FColor::White, false, -1.0f, 0, 1.0f);
 	}
 	
+	// Draw vertical lines at corners
 	for (int32 x = 0; x <= GridSizeX; x += GridSizeX)
 	{
 		for (int32 y = 0; y <= GridSizeY; y += GridSizeY)
 		{
-			const FVector VerticalStart = ActorLocation + FVector(x * CellSize, y * CellSize, 0);
-			const FVector VerticalEnd = VerticalStart + FVector(0, 0, GridHeight);
+			const FVector VerticalStart = GridOrigin + FVector(x * CellSize, y * CellSize, 0);
+			const FVector VerticalEnd = VerticalStart + FVector(0, 0, GridDepth);
 			
 			DrawDebugLine(GetWorld(), VerticalStart, VerticalEnd, FColor::White, false, -1.0f, 0, 1.0f);
+		}
+	}
+}
+
+void AVoxelFluidActor::UpdateBounds()
+{
+	if (BoundsComponent)
+	{
+		BoundsComponent->SetBoxExtent(CalculatedBoundsExtent);
+		BoundsComponent->SetRelativeLocation(BoundsOffset);
+	}
+}
+
+void AVoxelFluidActor::CalculateGridBounds()
+{
+	const FVector ActorLocation = GetActorLocation();
+	
+	if (bUseWorldBounds)
+	{
+		CalculatedGridOrigin = WorldBoundsMin;
+		CalculatedBoundsExtent = (WorldBoundsMax - WorldBoundsMin) * 0.5f;
+		
+		GridSizeX = FMath::CeilToInt((WorldBoundsMax.X - WorldBoundsMin.X) / CellSize);
+		GridSizeY = FMath::CeilToInt((WorldBoundsMax.Y - WorldBoundsMin.Y) / CellSize);
+		GridSizeZ = FMath::CeilToInt((WorldBoundsMax.Z - WorldBoundsMin.Z) / CellSize);
+	}
+	else
+	{
+		// Grid origin should be at actor location minus half extents (so actor is at center)
+		CalculatedGridOrigin = ActorLocation - BoundsExtent + BoundsOffset;
+		CalculatedBoundsExtent = BoundsExtent;
+		
+		GridSizeX = FMath::CeilToInt((BoundsExtent.X * 2.0f) / CellSize);
+		GridSizeY = FMath::CeilToInt((BoundsExtent.Y * 2.0f) / CellSize);
+		GridSizeZ = FMath::CeilToInt((BoundsExtent.Z * 2.0f) / CellSize);
+	}
+}
+
+void AVoxelFluidActor::UpdateGridOriginForMovement()
+{
+	if (!FluidGrid || bUseWorldBounds)
+		return;
+	
+	const FVector ActorLocation = GetActorLocation();
+	const FVector NewGridOrigin = ActorLocation - BoundsExtent + BoundsOffset;
+	
+	// Only update if the actor has actually moved
+	if (!NewGridOrigin.Equals(FluidGrid->GridOrigin, 1.0f))
+	{
+		FluidGrid->GridOrigin = NewGridOrigin;
+		
+		// Update terrain data when grid moves
+		if (VoxelIntegration && VoxelIntegration->bAutoUpdateTerrain)
+		{
+			VoxelIntegration->UpdateTerrainHeights();
 		}
 	}
 }

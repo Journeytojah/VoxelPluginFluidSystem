@@ -43,7 +43,7 @@ public:
 	UCAFluidGrid();
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid CA")
-	void InitializeGrid(int32 InSizeX, int32 InSizeY, int32 InSizeZ, float InCellSize);
+	void InitializeGrid(int32 InSizeX, int32 InSizeY, int32 InSizeZ, float InCellSize, const FVector& InGridOrigin = FVector::ZeroVector);
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid CA")
 	void UpdateSimulation(float DeltaTime);
@@ -99,12 +99,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
 	float CompressionFactor = 0.05f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
+	bool bAllowFluidEscape = true;
+
 	TArray<FCAFluidCell> Cells;
 	TArray<FCAFluidCell> NextCells;
 
-protected:
-
 	FVector GridOrigin;
+
+protected:
 
 	bool IsValidCell(int32 X, int32 Y, int32 Z) const;
 	int32 GetCellIndex(int32 X, int32 Y, int32 Z) const;

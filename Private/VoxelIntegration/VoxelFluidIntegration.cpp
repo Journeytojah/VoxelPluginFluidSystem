@@ -32,13 +32,7 @@ void UVoxelFluidIntegration::BeginPlay()
 		FluidGrid->InitializeGrid(GridResolutionX, GridResolutionY, GridResolutionZ, CellWorldSize);
 	}
 	
-	if (AActor* Owner = GetOwner())
-	{
-		if (USceneComponent* RootComp = Owner->GetRootComponent())
-		{
-			GridWorldOrigin = RootComp->GetComponentLocation();
-		}
-	}
+	// GridWorldOrigin will be set when FluidGrid is initialized
 	
 	if (IsVoxelWorldValid() && bAutoUpdateTerrain)
 	{
@@ -104,11 +98,13 @@ void UVoxelFluidIntegration::UpdateTerrainHeights()
 	if (!FluidGrid)
 		return;
 	
+	const FVector CurrentGridOrigin = FluidGrid->GridOrigin;
+	
 	for (int32 x = 0; x < GridResolutionX; ++x)
 	{
 		for (int32 y = 0; y < GridResolutionY; ++y)
 		{
-			const FVector WorldPos = GridWorldOrigin + FVector(x * CellWorldSize, y * CellWorldSize, 0);
+			const FVector WorldPos = CurrentGridOrigin + FVector(x * CellWorldSize, y * CellWorldSize, 0);
 			const float TerrainHeight = SampleVoxelHeight(WorldPos.X, WorldPos.Y);
 			
 			FluidGrid->SetTerrainHeight(x, y, TerrainHeight);
@@ -136,7 +132,7 @@ void UVoxelFluidIntegration::AddFluidAtWorldPosition(const FVector& WorldPositio
 		return;
 	
 	int32 CellX, CellY, CellZ;
-	if (FluidGrid->GetCellFromWorldPosition(WorldPosition - GridWorldOrigin, CellX, CellY, CellZ))
+	if (FluidGrid->GetCellFromWorldPosition(WorldPosition - FluidGrid->GridOrigin, CellX, CellY, CellZ))
 	{
 		FluidGrid->AddFluid(CellX, CellY, CellZ, Amount);
 	}
@@ -148,7 +144,7 @@ void UVoxelFluidIntegration::RemoveFluidAtWorldPosition(const FVector& WorldPosi
 		return;
 	
 	int32 CellX, CellY, CellZ;
-	if (FluidGrid->GetCellFromWorldPosition(WorldPosition - GridWorldOrigin, CellX, CellY, CellZ))
+	if (FluidGrid->GetCellFromWorldPosition(WorldPosition - FluidGrid->GridOrigin, CellX, CellY, CellZ))
 	{
 		FluidGrid->RemoveFluid(CellX, CellY, CellZ, Amount);
 	}
@@ -169,7 +165,7 @@ void UVoxelFluidIntegration::DrawDebugFluid()
 				
 				if (FluidLevel > MinFluidToRender)
 				{
-					const FVector CellWorldPos = GridWorldOrigin + FluidGrid->GetWorldPositionFromCell(x, y, z);
+					const FVector CellWorldPos = FluidGrid->GridOrigin + FluidGrid->GetWorldPositionFromCell(x, y, z);
 					const float BoxSize = CellWorldSize * 0.9f * FluidLevel;
 					
 					const FColor FluidColor = FColor::MakeRedToGreenColorFromScalar(1.0f - FluidLevel);

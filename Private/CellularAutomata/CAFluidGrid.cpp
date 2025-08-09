@@ -13,9 +13,10 @@ UCAFluidGrid::UCAFluidGrid()
 	MinFluidLevel = 0.001f;
 	MaxFluidLevel = 1.0f;
 	CompressionFactor = 0.05f;
+	bAllowFluidEscape = true;
 }
 
-void UCAFluidGrid::InitializeGrid(int32 InSizeX, int32 InSizeY, int32 InSizeZ, float InCellSize)
+void UCAFluidGrid::InitializeGrid(int32 InSizeX, int32 InSizeY, int32 InSizeZ, float InCellSize, const FVector& InGridOrigin)
 {
 	GridSizeX = FMath::Max(1, InSizeX);
 	GridSizeY = FMath::Max(1, InSizeY);
@@ -32,7 +33,7 @@ void UCAFluidGrid::InitializeGrid(int32 InSizeX, int32 InSizeY, int32 InSizeZ, f
 		NextCells[i] = FCAFluidCell();
 	}
 
-	GridOrigin = FVector::ZeroVector;
+	GridOrigin = InGridOrigin;
 }
 
 void UCAFluidGrid::UpdateSimulation(float DeltaTime)
@@ -54,6 +55,30 @@ void UCAFluidGrid::ApplyGravity(float DeltaTime)
 {
 	const float GravityFlow = (Gravity / 1000.0f) * DeltaTime;
 
+	// Handle fluid at bottom boundary first (z=0)
+	if (bAllowFluidEscape)
+	{
+		for (int32 y = 0; y < GridSizeY; ++y)
+		{
+			for (int32 x = 0; x < GridSizeX; ++x)
+			{
+				const int32 BottomIdx = GetCellIndex(x, y, 0);
+				if (BottomIdx != -1)
+				{
+					FCAFluidCell& BottomCell = Cells[BottomIdx];
+					if (BottomCell.FluidLevel > MinFluidLevel && !BottomCell.bIsSolid)
+					{
+						// Allow fluid to escape through bottom boundary
+						const float EscapeAmount = BottomCell.FluidLevel * GravityFlow * 0.1f; // Slower escape rate
+						NextCells[BottomIdx].FluidLevel -= EscapeAmount;
+						NextCells[BottomIdx].FlowVelocity.Z = -EscapeAmount / DeltaTime;
+					}
+				}
+			}
+		}
+	}
+
+	// Apply gravity between all cells
 	for (int32 z = GridSizeZ - 1; z >= 1; --z)
 	{
 		for (int32 y = 0; y < GridSizeY; ++y)
@@ -144,6 +169,13 @@ void UCAFluidGrid::ApplyFlowRules(float DeltaTime)
 							}
 						}
 					}
+					else if (bAllowFluidEscape && (nx < 0 || nx >= GridSizeX || ny < 0 || ny >= GridSizeY))
+					{
+						// Allow fluid to escape through side boundaries
+						const float EscapeFlow = CurrentCell.FluidLevel * FlowAmount * 0.05f; // Very slow escape
+						OutflowToNeighbor[i] = EscapeFlow;
+						TotalOutflow += OutflowToNeighbor[i];
+					}
 				}
 
 				if (TotalOutflow > CurrentCell.FluidLevel)
@@ -162,10 +194,16 @@ void UCAFluidGrid::ApplyFlowRules(float DeltaTime)
 					{
 						const int32 nx = Neighbors[i][0];
 						const int32 ny = Neighbors[i][1];
-						const int32 NeighborIdx = GetCellIndex(nx, ny, z);
 						
 						NextCells[CurrentIdx].FluidLevel -= OutflowToNeighbor[i];
-						NextCells[NeighborIdx].FluidLevel += OutflowToNeighbor[i];
+						
+						// Only add to neighbor if it's a valid cell (not escaping)
+						if (IsValidCell(nx, ny, z))
+						{
+							const int32 NeighborIdx = GetCellIndex(nx, ny, z);
+							NextCells[NeighborIdx].FluidLevel += OutflowToNeighbor[i];
+						}
+						// If not valid, fluid escapes and is removed
 
 						const float VelocityMagnitude = OutflowToNeighbor[i] / DeltaTime;
 						if (i == 0) NextCells[CurrentIdx].FlowVelocity.X = VelocityMagnitude;

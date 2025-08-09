@@ -53,6 +53,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid", meta = (CallInEditor = "true"))
 	void TestFluidSpawn();
 
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid", meta = (CallInEditor = "true"))
+	void UpdateBounds();
+
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
+	void UpdateGridOriginForMovement();
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UBoxComponent* BoundsComponent;
 
@@ -89,6 +95,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid Settings")
 	float CellSize = 100.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bounds Settings", meta = (CallInEditor = "true"))
+	FVector BoundsExtent = FVector(6400.0f, 6400.0f, 1600.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bounds Settings")
+	FVector BoundsOffset = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bounds Settings")
+	bool bUseWorldBounds = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bounds Settings", meta = (EditCondition = "bUseWorldBounds"))
+	FVector WorldBoundsMin = FVector(-5000.0f, -5000.0f, -1000.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bounds Settings", meta = (EditCondition = "bUseWorldBounds"))
+	FVector WorldBoundsMax = FVector(5000.0f, 5000.0f, 2000.0f);
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties")
 	float FluidViscosity = 0.1f;
 
@@ -97,6 +118,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties")
 	float GravityStrength = 981.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties")
+	bool bAllowFluidEscape = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bShowDebugGrid = false;
@@ -113,4 +137,8 @@ private:
 	void UpdateFluidSources(float DeltaTime);
 	void UpdateDebugVisualization();
 	void DrawDebugGrid();
+	void CalculateGridBounds();
+
+	FVector CalculatedGridOrigin;
+	FVector CalculatedBoundsExtent;
 };
