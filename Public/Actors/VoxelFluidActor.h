@@ -5,9 +5,11 @@
 #include "VoxelFluidActor.generated.h"
 
 class UCAFluidGrid;
+class UFluidChunkManager;
 class UVoxelFluidIntegration;
 class UFluidVisualizationComponent;
 class UBoxComponent;
+struct FChunkStreamingConfig;
 
 UCLASS(Blueprintable, BlueprintType)
 class VOXELFLUIDSYSTEM_API AVoxelFluidActor : public AActor
@@ -19,8 +21,14 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaTime) override;
 	virtual void OnConstruction(const FTransform& Transform) override;
+	
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual bool ShouldTickIfViewportsOnly() const override { return true; }
+#endif
 
 public:
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
@@ -66,6 +74,9 @@ public:
 	UCAFluidGrid* FluidGrid;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	UFluidChunkManager* ChunkManager;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UVoxelFluidIntegration* VoxelIntegration;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
@@ -94,6 +105,33 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid Settings")
 	float CellSize = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
+	bool bUseChunkedSystem = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	int32 ChunkSize = 32;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	float ChunkLoadDistance = 8000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	float ChunkActiveDistance = 5000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	int32 MaxActiveChunks = 64;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	int32 MaxLoadedChunks = 128;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	bool bUseAsyncChunkLoading = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	float LOD1Distance = 2000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	float LOD2Distance = 4000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bounds Settings", meta = (CallInEditor = "true"))
 	FVector BoundsExtent = FVector(6400.0f, 6400.0f, 1600.0f);
@@ -147,6 +185,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Performance")
 	float GetTotalFluidVolume() const;
 
+	UFUNCTION(BlueprintCallable, Category = "Chunk System")
+	int32 GetLoadedChunkCount() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Chunk System")
+	int32 GetActiveChunkCount() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Chunk System")
+	void ForceUpdateChunkStreaming();
+
+	UFUNCTION(BlueprintCallable, Category = "Chunk System")
+	FString GetChunkSystemStats() const;
+
 private:
 	TMap<FVector, float> FluidSources;
 	
@@ -154,6 +204,9 @@ private:
 	void UpdateDebugVisualization();
 	void DrawDebugGrid();
 	void CalculateGridBounds();
+	void InitializeChunkedSystem();
+	void UpdateChunkedSystem(float DeltaTime);
+	TArray<FVector> GetViewerPositions() const;
 
 	FVector CalculatedGridOrigin;
 	FVector CalculatedBoundsExtent;

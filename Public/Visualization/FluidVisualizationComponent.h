@@ -5,8 +5,10 @@
 #include "FluidVisualizationComponent.generated.h"
 
 class UCAFluidGrid;
+class UFluidChunkManager;
 class UMaterialInterface;
 class UInstancedStaticMeshComponent;
+class UFluidChunk;
 
 UENUM(BlueprintType)
 enum class EFluidRenderMode : uint8
@@ -32,10 +34,19 @@ public:
 	void SetFluidGrid(UCAFluidGrid* InFluidGrid);
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid Visualization")
+	void SetChunkManager(UFluidChunkManager* InChunkManager);
+
+	UFUNCTION(BlueprintCallable, Category = "Fluid Visualization")
 	void UpdateVisualization();
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid Visualization")
 	void GenerateInstancedVisualization();
+
+	UFUNCTION(BlueprintCallable, Category = "Fluid Visualization")
+	void GenerateChunkedVisualization();
+
+	UFUNCTION(BlueprintCallable, Category = "Fluid Visualization")
+	void SetMaxRenderDistance(float Distance) { MaxRenderDistance = Distance; }
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization")
 	EFluidRenderMode RenderMode = EFluidRenderMode::Debug;
@@ -61,15 +72,39 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization")
 	float FlowVectorScale = 50.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Visualization")
+	float MaxRenderDistance = 10000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Visualization")
+	bool bShowChunkBounds = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Visualization")
+	int32 MaxCellsToRenderPerFrame = 50000;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Visualization")
+	bool bUseLODForVisualization = true;
+
 private:
 	UPROPERTY()
 	UCAFluidGrid* FluidGrid;
 
 	UPROPERTY()
+	UFluidChunkManager* ChunkManager;
+
+	UPROPERTY()
 	UInstancedStaticMeshComponent* InstancedMeshComponent;
 
 	float MeshUpdateTimer = 0.0f;
+	bool bUseChunkedSystem = false;
 
 	void DrawDebugFluid();
+	void DrawChunkedDebugFluid();
 	void UpdateInstancedMeshes();
+	void UpdateChunkedInstancedMeshes();
+	void RenderFluidChunk(UFluidChunk* Chunk, const FVector& ViewerPosition);
+	bool ShouldRenderChunk(UFluidChunk* Chunk, const FVector& ViewerPosition) const;
+	FVector GetPrimaryViewerPosition() const;
+	void DrawChunkBounds() const;
+	
+	TMap<UFluidChunk*, UInstancedStaticMeshComponent*> ChunkMeshComponents;
 };

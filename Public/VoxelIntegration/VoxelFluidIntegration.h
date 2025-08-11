@@ -8,6 +8,7 @@
 #include "VoxelFluidIntegration.generated.h"
 
 class AActor;
+class UFluidChunkManager;
 
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class VOXELFLUIDSYSTEM_API UVoxelFluidIntegration : public UActorComponent
@@ -26,10 +27,16 @@ public:
 	void InitializeFluidSystem(AActor* InVoxelWorld);
 
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
+	void SetChunkManager(UFluidChunkManager* InChunkManager);
+
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
 	void SyncWithVoxelTerrain();
 
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
 	void UpdateTerrainHeights();
+
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
+	void UpdateChunkedTerrainHeights();
 
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
 	float SampleVoxelHeight(float WorldX, float WorldY);
@@ -48,6 +55,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Fluid")
 	UCAFluidGrid* FluidGrid;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Fluid")
+	UFluidChunkManager* ChunkManager;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
 	int32 GridResolutionX = 128;
@@ -88,7 +98,11 @@ public:
 private:
 	float TerrainUpdateTimer = 0.0f;
 	FVector GridWorldOrigin;
+	bool bUseChunkedSystem = false;
 
 	void DrawDebugFluid();
+	void DrawChunkedDebugFluid();
 	bool IsVoxelWorldValid() const;
+	
+	void UpdateTerrainForChunk(const FVector& ChunkWorldMin, const FVector& ChunkWorldMax, int32 ChunkSize, float CellSize);
 };

@@ -1,8 +1,11 @@
 #include "VoxelIntegration/VoxelFluidIntegration.h"
 #include "VoxelIntegration/VoxelTerrainSampler.h"
+#include "CellularAutomata/FluidChunkManager.h"
+#include "CellularAutomata/FluidChunk.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "Components/SceneComponent.h"
+#include "VoxelFluidStats.h"
 
 UVoxelFluidIntegration::UVoxelFluidIntegration()
 {
@@ -22,21 +25,33 @@ void UVoxelFluidIntegration::BeginPlay()
 {
 	Super::BeginPlay();
 	
-	if (!FluidGrid)
+	// Check if using chunked system or grid system
+	if (bUseChunkedSystem && ChunkManager)
 	{
-		FluidGrid = NewObject<UCAFluidGrid>(this, UCAFluidGrid::StaticClass());
+		// Chunked system handles its own initialization
+		if (IsVoxelWorldValid() && bAutoUpdateTerrain)
+		{
+			UpdateChunkedTerrainHeights();
+		}
 	}
-	
-	if (FluidGrid)
+	else
 	{
-		FluidGrid->InitializeGrid(GridResolutionX, GridResolutionY, GridResolutionZ, CellWorldSize);
-	}
-	
-	// GridWorldOrigin will be set when FluidGrid is initialized
-	
-	if (IsVoxelWorldValid() && bAutoUpdateTerrain)
-	{
-		UpdateTerrainHeights();
+		if (!FluidGrid)
+		{
+			FluidGrid = NewObject<UCAFluidGrid>(this, UCAFluidGrid::StaticClass());
+		}
+		
+		if (FluidGrid)
+		{
+			FluidGrid->InitializeGrid(GridResolutionX, GridResolutionY, GridResolutionZ, CellWorldSize);
+		}
+		
+		// GridWorldOrigin will be set when FluidGrid is initialized
+		
+		if (IsVoxelWorldValid() && bAutoUpdateTerrain)
+		{
+			UpdateTerrainHeights();
+		}
 	}
 }
 
@@ -44,26 +59,47 @@ void UVoxelFluidIntegration::TickComponent(float DeltaTime, ELevelTick TickType,
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	
-	if (!FluidGrid)
-		return;
-	
-	FluidGrid->UpdateSimulation(DeltaTime);
-	
-	if (bAutoUpdateTerrain)
+	if (bUseChunkedSystem)
 	{
-		TerrainUpdateTimer += DeltaTime;
-		if (TerrainUpdateTimer >= TerrainUpdateInterval)
+		// Chunked system is handled by VoxelFluidActor, we just handle terrain updates here
+		if (bAutoUpdateTerrain)
 		{
-			TerrainUpdateTimer = 0.0f;
-			UpdateTerrainHeights();
+			TerrainUpdateTimer += DeltaTime;
+			if (TerrainUpdateTimer >= TerrainUpdateInterval)
+			{
+				TerrainUpdateTimer = 0.0f;
+				UpdateChunkedTerrainHeights();
+			}
+		}
+		
+		if (bDebugDrawCells)
+		{
+			DrawChunkedDebugFluid();
 		}
 	}
-	
-	// Disable debug drawing from VoxelFluidIntegration to avoid conflicts with FluidVisualizationComponent
-	// if (bDebugDrawCells)
-	// {
-	//	DrawDebugFluid();
-	// }
+	else
+	{
+		if (!FluidGrid)
+			return;
+		
+		FluidGrid->UpdateSimulation(DeltaTime);
+		
+		if (bAutoUpdateTerrain)
+		{
+			TerrainUpdateTimer += DeltaTime;
+			if (TerrainUpdateTimer >= TerrainUpdateInterval)
+			{
+				TerrainUpdateTimer = 0.0f;
+				UpdateTerrainHeights();
+			}
+		}
+		
+		// Disable debug drawing from VoxelFluidIntegration to avoid conflicts with FluidVisualizationComponent
+		// if (bDebugDrawCells)
+		// {
+		//	DrawDebugFluid();
+		// }
+	}
 }
 
 void UVoxelFluidIntegration::InitializeFluidSystem(AActor* InVoxelWorld)
@@ -252,4 +288,105 @@ void UVoxelFluidIntegration::DrawDebugFluid()
 bool UVoxelFluidIntegration::IsVoxelWorldValid() const
 {
 	return VoxelWorld != nullptr;
+}
+
+void UVoxelFluidIntegration::SetChunkManager(UFluidChunkManager* InChunkManager)
+{
+	ChunkManager = InChunkManager;
+	bUseChunkedSystem = (ChunkManager != nullptr);
+	
+	if (bUseChunkedSystem)
+	{
+		FluidGrid = nullptr; // Clear grid system when using chunked system
+		UE_LOG(LogTemp, Log, TEXT("VoxelFluidIntegration: Switched to chunked system"));
+	}
+}
+
+void UVoxelFluidIntegration::UpdateChunkedTerrainHeights()
+{
+	if (!bUseChunkedSystem || !ChunkManager || !IsVoxelWorldValid())
+		return;
+	
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_VoxelIntegration);
+	
+	// Get all active chunks and update their terrain data
+	const TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
+	
+	for (UFluidChunk* Chunk : ActiveChunks)
+	{
+		if (!Chunk)
+			continue;
+		
+		const FBox ChunkBounds = Chunk->GetWorldBounds();
+		UpdateTerrainForChunk(ChunkBounds.Min, ChunkBounds.Max, Chunk->ChunkSize, Chunk->CellSize);
+	}
+}
+
+void UVoxelFluidIntegration::UpdateTerrainForChunk(const FVector& ChunkWorldMin, const FVector& ChunkWorldMax, int32 ChunkSize, float CellSize)
+{
+	if (!bUseChunkedSystem || !ChunkManager)
+		return;
+	
+	// Get the chunk from the ChunkManager
+	const FFluidChunkCoord ChunkCoord = ChunkManager->GetChunkCoordFromWorldPosition(ChunkWorldMin + FVector(CellSize * 0.5f));
+	UFluidChunk* Chunk = ChunkManager->GetChunk(ChunkCoord);
+	
+	if (!Chunk)
+		return;
+	
+	// Sample terrain heights for this chunk and set them directly
+	for (int32 LocalX = 0; LocalX < ChunkSize; ++LocalX)
+	{
+		for (int32 LocalY = 0; LocalY < ChunkSize; ++LocalY)
+		{
+			// Sample at the center of the cell for more accurate terrain collision
+			const FVector WorldPos = ChunkWorldMin + FVector((LocalX + 0.5f) * CellSize, (LocalY + 0.5f) * CellSize, 0);
+			const float TerrainHeight = SampleVoxelHeight(WorldPos.X, WorldPos.Y);
+			
+			// Set terrain height for this column - this will mark cells as solid based on terrain height
+			Chunk->SetTerrainHeight(LocalX, LocalY, TerrainHeight);
+		}
+	}
+	
+	UE_LOG(LogTemp, VeryVerbose, TEXT("UpdateTerrainForChunk: Updated terrain for chunk %s"), *ChunkCoord.ToString());
+}
+
+void UVoxelFluidIntegration::DrawChunkedDebugFluid()
+{
+	if (!bUseChunkedSystem || !ChunkManager || !GetWorld())
+		return;
+	
+	const TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
+	
+	for (UFluidChunk* Chunk : ActiveChunks)
+	{
+		if (!Chunk)
+			continue;
+		
+		const int32 ChunkSizeLocal = Chunk->ChunkSize;
+		const float CellSizeLocal = Chunk->CellSize;
+		const FVector ChunkOrigin = Chunk->ChunkWorldPosition;
+		
+		// Sample every 4th cell for performance
+		for (int32 x = 0; x < ChunkSizeLocal; x += 4)
+		{
+			for (int32 y = 0; y < ChunkSizeLocal; y += 4)
+			{
+				for (int32 z = 0; z < ChunkSizeLocal; z += 2)
+				{
+					const float FluidLevel = Chunk->GetFluidAt(x, y, z);
+					
+					if (FluidLevel > MinFluidToRender)
+					{
+						const FVector CellWorldPos = ChunkOrigin + FVector(x * CellSizeLocal, y * CellSizeLocal, z * CellSizeLocal);
+						const float BoxSize = CellSizeLocal * 3.6f * FluidLevel; // Larger boxes for sparse sampling
+						
+						const FColor FluidColor = FColor::MakeRedToGreenColorFromScalar(1.0f - FluidLevel);
+						
+						DrawDebugBox(GetWorld(), CellWorldPos, FVector(BoxSize * 0.5f), FluidColor, false, -1.0f, 0, 2.0f);
+					}
+				}
+			}
+		}
+	}
 }
