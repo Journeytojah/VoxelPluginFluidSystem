@@ -73,6 +73,8 @@ void AVoxelFluidActor::Tick(float DeltaTime)
 	{
 		UpdateDebugVisualization();
 	}
+
+	VisualizationComponent->UpdateVisualization();
 }
 
 void AVoxelFluidActor::OnConstruction(const FTransform& Transform)
