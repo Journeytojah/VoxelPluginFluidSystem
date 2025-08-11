@@ -116,7 +116,20 @@ void UCAFluidGrid::ApplyGravity(float DeltaTime)
 				if (CurrentCell.FluidLevel > MinFluidLevel && !BelowCell.bIsSolid)
 				{
 					const float SpaceBelow = MaxFluidLevel - BelowCell.FluidLevel;
-					const float FlowAmount = FMath::Min(CurrentCell.FluidLevel * GravityFlow, SpaceBelow);
+					
+					// Reduce gravity flow when cell below already has fluid (to promote horizontal spreading)
+					float GravityMultiplier = 1.0f;
+					if (BelowCell.FluidLevel > MaxFluidLevel * 0.5f)
+					{
+						GravityMultiplier = 0.3f; // Slow down vertical flow when below is partially filled
+					}
+					else if (BelowCell.FluidLevel > MaxFluidLevel * 0.2f)
+					{
+						GravityMultiplier = 0.6f;
+					}
+					
+					const float AdjustedGravityFlow = GravityFlow * GravityMultiplier;
+					const float FlowAmount = FMath::Min(CurrentCell.FluidLevel * AdjustedGravityFlow, SpaceBelow);
 
 					if (FlowAmount > 0)
 					{
@@ -161,6 +174,25 @@ void UCAFluidGrid::ApplyFlowRules(float DeltaTime)
 				float TotalOutflow = 0.0f;
 				float OutflowToNeighbor[4] = {0.0f};
 
+				// Check if there's a solid cell below (water should spread more horizontally when resting on ground)
+				bool bHasSolidBelow = false;
+				if (z > 0)
+				{
+					const int32 BelowIdx = GetCellIndex(x, y, z - 1);
+					if (BelowIdx != -1)
+					{
+						bHasSolidBelow = Cells[BelowIdx].bIsSolid || Cells[BelowIdx].FluidLevel >= MaxFluidLevel * 0.95f;
+					}
+				}
+				else
+				{
+					bHasSolidBelow = true; // Bottom of grid
+				}
+
+				// Increase horizontal flow rate when fluid has solid support below
+				const float HorizontalFlowMultiplier = bHasSolidBelow ? 2.5f : 1.0f;
+				const float AdjustedFlowAmount = FlowAmount * HorizontalFlowMultiplier;
+
 				for (int32 i = 0; i < 4; ++i)
 				{
 					const int32 nx = Neighbors[i][0];
@@ -176,12 +208,15 @@ void UCAFluidGrid::ApplyFlowRules(float DeltaTime)
 							const float HeightDiff = (CurrentCell.TerrainHeight + CurrentCell.FluidLevel) - 
 													 (NeighborCell.TerrainHeight + NeighborCell.FluidLevel);
 							
-							if (HeightDiff > 0)
+							// Allow horizontal spreading even with small height differences when resting on ground
+							const float MinHeightDiffForFlow = bHasSolidBelow ? 0.01f : 0.0f;
+							
+							if (HeightDiff > MinHeightDiffForFlow || (bHasSolidBelow && CurrentCell.FluidLevel > 0.1f && NeighborCell.FluidLevel < CurrentCell.FluidLevel))
 							{
-								const float PossibleFlow = FMath::Min(
-									CurrentCell.FluidLevel * FlowAmount,
-									HeightDiff * 0.5f
-								);
+								// More aggressive horizontal spreading when resting on solid ground
+								const float PossibleFlow = bHasSolidBelow ?
+									FMath::Min(CurrentCell.FluidLevel * AdjustedFlowAmount, FMath::Max(HeightDiff * 0.8f, CurrentCell.FluidLevel * 0.25f)) :
+									FMath::Min(CurrentCell.FluidLevel * AdjustedFlowAmount, HeightDiff * 0.5f);
 								
 								const float SpaceInNeighbor = MaxFluidLevel - NeighborCell.FluidLevel;
 								OutflowToNeighbor[i] = FMath::Min(PossibleFlow, SpaceInNeighbor);
