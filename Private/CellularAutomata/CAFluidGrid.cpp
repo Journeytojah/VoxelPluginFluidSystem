@@ -1,5 +1,6 @@
 #include "CellularAutomata/CAFluidGrid.h"
 #include "Math/UnrealMathUtility.h"
+#include "VoxelFluidStats.h"
 
 UCAFluidGrid::UCAFluidGrid()
 {
@@ -38,10 +39,27 @@ void UCAFluidGrid::InitializeGrid(int32 InSizeX, int32 InSizeY, int32 InSizeZ, f
 
 void UCAFluidGrid::UpdateSimulation(float DeltaTime)
 {
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_UpdateSimulation);
+	
 	if (Cells.Num() == 0)
 		return;
 
 	NextCells = Cells;
+
+	// Count active cells and total volume for stats
+	int32 ActiveCellCount = 0;
+	float TotalVolume = 0.0f;
+	for (const FCAFluidCell& Cell : Cells)
+	{
+		if (Cell.FluidLevel > MinFluidLevel)
+		{
+			ActiveCellCount++;
+			TotalVolume += Cell.FluidLevel;
+		}
+	}
+	SET_DWORD_STAT(STAT_VoxelFluid_ActiveCells, ActiveCellCount);
+	SET_DWORD_STAT(STAT_VoxelFluid_TotalCells, Cells.Num());
+	SET_FLOAT_STAT(STAT_VoxelFluid_TotalVolume, TotalVolume);
 
 	ApplyGravity(DeltaTime);
 	ApplyFlowRules(DeltaTime);
@@ -53,6 +71,7 @@ void UCAFluidGrid::UpdateSimulation(float DeltaTime)
 
 void UCAFluidGrid::ApplyGravity(float DeltaTime)
 {
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ApplyGravity);
 	const float GravityFlow = (Gravity / 1000.0f) * DeltaTime;
 
 	// Handle fluid at bottom boundary first (z=0)
@@ -114,6 +133,7 @@ void UCAFluidGrid::ApplyGravity(float DeltaTime)
 
 void UCAFluidGrid::ApplyFlowRules(float DeltaTime)
 {
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ApplyFlowRules);
 	const float FlowAmount = FlowRate * DeltaTime;
 
 	for (int32 z = 0; z < GridSizeZ; ++z)
@@ -219,6 +239,7 @@ void UCAFluidGrid::ApplyFlowRules(float DeltaTime)
 
 void UCAFluidGrid::ApplyPressure(float DeltaTime)
 {
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ApplyPressure);
 	for (int32 z = 0; z < GridSizeZ; ++z)
 	{
 		for (int32 y = 0; y < GridSizeY; ++y)
@@ -256,6 +277,7 @@ void UCAFluidGrid::ApplyPressure(float DeltaTime)
 
 void UCAFluidGrid::UpdateVelocities(float DeltaTime)
 {
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_UpdateVelocities);
 	const float ViscosityDamping = 1.0f - (Viscosity * DeltaTime);
 
 	for (int32 i = 0; i < NextCells.Num(); ++i)

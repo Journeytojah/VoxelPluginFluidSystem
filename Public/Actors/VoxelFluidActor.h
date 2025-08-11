@@ -131,6 +131,22 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	float DebugFluidSpawnAmount = 1.0f;
 
+	// Performance Monitoring
+	UFUNCTION(BlueprintCallable, Category = "Performance", meta = (CallInEditor = "true"))
+	FString GetPerformanceStats() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Performance")
+	void EnableProfiling(bool bEnable);
+
+	UFUNCTION(BlueprintCallable, Category = "Performance")
+	float GetLastFrameSimulationTime() const { return LastFrameSimulationTime; }
+
+	UFUNCTION(BlueprintCallable, Category = "Performance")
+	int32 GetActiveCellCount() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Performance")
+	float GetTotalFluidVolume() const;
+
 private:
 	TMap<FVector, float> FluidSources;
 	
@@ -141,4 +157,9 @@ private:
 
 	FVector CalculatedGridOrigin;
 	FVector CalculatedBoundsExtent;
+	
+	// Performance tracking
+	float LastFrameSimulationTime = 0.0f;
+	bool bProfilingEnabled = false;
+	FDateTime LastProfilingTime;
 };

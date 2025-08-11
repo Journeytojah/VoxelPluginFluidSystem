@@ -5,6 +5,7 @@
 #include "Components/BoxComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
+#include "VoxelFluidStats.h"
 
 AVoxelFluidActor::AVoxelFluidActor()
 {
@@ -57,11 +58,15 @@ void AVoxelFluidActor::Tick(float DeltaTime)
 	
 	if (bIsSimulating && FluidGrid)
 	{
+		const double StartTime = FPlatformTime::Seconds();
+		
 		const float ScaledDeltaTime = DeltaTime * SimulationSpeed;
 		
 		UpdateFluidSources(ScaledDeltaTime);
 		
 		FluidGrid->UpdateSimulation(ScaledDeltaTime);
+		
+		LastFrameSimulationTime = (FPlatformTime::Seconds() - StartTime) * 1000.0f; // Convert to ms
 	}
 	
 	if (bShowDebugGrid || bShowFlowVectors)
@@ -375,4 +380,73 @@ void AVoxelFluidActor::UpdateGridOriginForMovement()
 			VoxelIntegration->UpdateTerrainHeights();
 		}
 	}
+}
+
+FString AVoxelFluidActor::GetPerformanceStats() const
+{
+	if (!FluidGrid)
+		return TEXT("Fluid Grid not initialized");
+	
+	const int32 TotalCells = GridSizeX * GridSizeY * GridSizeZ;
+	const int32 ActiveCells = GetActiveCellCount();
+	const float TotalVolume = GetTotalFluidVolume();
+	const float CellsPerMs = TotalCells / FMath::Max(0.001f, LastFrameSimulationTime);
+	
+	return FString::Printf(
+		TEXT("=== VoxelFluid Performance Stats ===\n")
+		TEXT("Grid Size: %dx%dx%d (%d cells)\n")
+		TEXT("Active Cells: %d (%.1f%%)\n")
+		TEXT("Total Fluid Volume: %.2f\n")
+		TEXT("Last Frame Time: %.3f ms\n")
+		TEXT("Cells/ms: %.0f\n")
+		TEXT("Est. Max FPS: %.1f"),
+		GridSizeX, GridSizeY, GridSizeZ, TotalCells,
+		ActiveCells, (float)ActiveCells / TotalCells * 100.0f,
+		TotalVolume,
+		LastFrameSimulationTime,
+		CellsPerMs,
+		1000.0f / FMath::Max(0.001f, LastFrameSimulationTime)
+	);
+}
+
+void AVoxelFluidActor::EnableProfiling(bool bEnable)
+{
+	bProfilingEnabled = bEnable;
+	
+	if (bEnable)
+	{
+		LastProfilingTime = FDateTime::Now();
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluid Profiling Enabled - Use 'stat VoxelFluid' to view stats"));
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluid Profiling Disabled"));
+	}
+}
+
+int32 AVoxelFluidActor::GetActiveCellCount() const
+{
+	if (!FluidGrid)
+		return 0;
+	
+	int32 Count = 0;
+	for (const FCAFluidCell& Cell : FluidGrid->Cells)
+	{
+		if (Cell.FluidLevel > FluidGrid->MinFluidLevel)
+			Count++;
+	}
+	return Count;
+}
+
+float AVoxelFluidActor::GetTotalFluidVolume() const
+{
+	if (!FluidGrid)
+		return 0.0f;
+	
+	float TotalVolume = 0.0f;
+	for (const FCAFluidCell& Cell : FluidGrid->Cells)
+	{
+		TotalVolume += Cell.FluidLevel;
+	}
+	return TotalVolume;
 }
