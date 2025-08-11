@@ -9,6 +9,7 @@
 
 class AActor;
 class UFluidChunkManager;
+struct FFluidChunkCoord;
 
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class VOXELFLUIDSYSTEM_API UVoxelFluidIntegration : public UActorComponent
@@ -39,6 +40,9 @@ public:
 	void UpdateChunkedTerrainHeights();
 
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
+	void UpdateTerrainForChunkCoord(const struct FFluidChunkCoord& ChunkCoord);
+
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
 	float SampleVoxelHeight(float WorldX, float WorldY);
 
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
@@ -49,6 +53,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
 	void RemoveFluidAtWorldPosition(const FVector& WorldPosition, float Amount);
+
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
+	bool IsVoxelWorldValid() const;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Fluid")
 	AActor* VoxelWorld;
@@ -102,7 +109,6 @@ private:
 
 	void DrawDebugFluid();
 	void DrawChunkedDebugFluid();
-	bool IsVoxelWorldValid() const;
 	
 	void UpdateTerrainForChunk(const FVector& ChunkWorldMin, const FVector& ChunkWorldMax, int32 ChunkSize, float CellSize);
 };

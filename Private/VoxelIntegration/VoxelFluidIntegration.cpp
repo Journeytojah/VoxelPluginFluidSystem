@@ -351,6 +351,19 @@ void UVoxelFluidIntegration::UpdateTerrainForChunk(const FVector& ChunkWorldMin,
 	UE_LOG(LogTemp, VeryVerbose, TEXT("UpdateTerrainForChunk: Updated terrain for chunk %s"), *ChunkCoord.ToString());
 }
 
+void UVoxelFluidIntegration::UpdateTerrainForChunkCoord(const FFluidChunkCoord& ChunkCoord)
+{
+	if (!bUseChunkedSystem || !ChunkManager || !IsVoxelWorldValid())
+		return;
+	
+	UFluidChunk* Chunk = ChunkManager->GetChunk(ChunkCoord);
+	if (!Chunk)
+		return;
+	
+	const FBox ChunkBounds = Chunk->GetWorldBounds();
+	UpdateTerrainForChunk(ChunkBounds.Min, ChunkBounds.Max, Chunk->ChunkSize, Chunk->CellSize);
+}
+
 void UVoxelFluidIntegration::DrawChunkedDebugFluid()
 {
 	if (!bUseChunkedSystem || !ChunkManager || !GetWorld())

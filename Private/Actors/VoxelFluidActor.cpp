@@ -1,6 +1,7 @@
 #include "Actors/VoxelFluidActor.h"
 #include "CellularAutomata/CAFluidGrid.h"
 #include "CellularAutomata/FluidChunkManager.h"
+#include "CellularAutomata/FluidChunk.h"
 #include "VoxelIntegration/VoxelFluidIntegration.h"
 #include "Visualization/FluidVisualizationComponent.h"
 #include "Components/BoxComponent.h"
@@ -167,6 +168,15 @@ void AVoxelFluidActor::InitializeFluidSystem()
 			{
 				VoxelIntegration->InitializeFluidSystem(TargetVoxelWorld);
 			}
+			
+			// Bind to chunk loaded delegate to refresh terrain data
+			ChunkManager->OnChunkLoadedDelegate.AddLambda([this](const FFluidChunkCoord& ChunkCoord)
+			{
+				if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
+				{
+					VoxelIntegration->UpdateTerrainForChunkCoord(ChunkCoord);
+				}
+			});
 		}
 		else if (FluidGrid)
 		{

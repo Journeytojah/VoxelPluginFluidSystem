@@ -671,6 +671,9 @@ void UFluidChunkManager::ActivateChunk(UFluidChunk* Chunk)
 		ActiveChunkCoords.Add(Coord);
 		InactiveChunkCoords.Remove(Coord);
 		BorderOnlyChunkCoords.Remove(Coord);
+		
+		// Notify that the chunk has been activated (for terrain refresh)
+		OnChunkLoadedDelegate.Broadcast(Coord);
 	}
 }
 
