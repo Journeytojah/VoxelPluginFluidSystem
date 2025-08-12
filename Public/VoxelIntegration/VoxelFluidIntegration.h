@@ -85,13 +85,7 @@ public:
 	float TerrainUpdateInterval = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
-	bool bDebugDrawCells = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
 	float MinFluidToRender = 0.01f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
-	bool bEnableFlowVisualization = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain")
 	FVoxelStackLayer TerrainLayer;

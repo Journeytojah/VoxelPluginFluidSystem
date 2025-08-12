@@ -28,3 +28,11 @@ DECLARE_DWORD_COUNTER_STAT(TEXT("Chunk Unload Queue Size"), STAT_VoxelFluid_Chun
 DECLARE_FLOAT_COUNTER_STAT(TEXT("Average Chunk Update Time"), STAT_VoxelFluid_AvgChunkUpdateTime, STATGROUP_VoxelFluid);
 DECLARE_DWORD_COUNTER_STAT(TEXT("Rendered Fluid Cells"), STAT_VoxelFluid_RenderedCells, STATGROUP_VoxelFluid);
 DECLARE_DWORD_COUNTER_STAT(TEXT("Rendered Chunks"), STAT_VoxelFluid_RenderedChunks, STATGROUP_VoxelFluid);
+
+// Additional debug stats
+DECLARE_FLOAT_COUNTER_STAT(TEXT("Player Position X"), STAT_VoxelFluid_PlayerPosX, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("Player Position Y"), STAT_VoxelFluid_PlayerPosY, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("Player Position Z"), STAT_VoxelFluid_PlayerPosZ, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("Active Distance Range"), STAT_VoxelFluid_ActiveDistance, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("Load Distance Range"), STAT_VoxelFluid_LoadDistance, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("Cross-Chunk Flow Enabled"), STAT_VoxelFluid_CrossChunkFlow, STATGROUP_VoxelFluid);

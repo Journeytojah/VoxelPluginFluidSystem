@@ -17,7 +17,7 @@ UVoxelFluidIntegration::UVoxelFluidIntegration()
 	CellWorldSize = 100.0f;
 	bAutoUpdateTerrain = true;
 	TerrainUpdateInterval = 1.0f;
-	bDebugDrawCells = false;
+	// bDebugDrawCells removed - debug drawing handled by FluidVisualizationComponent
 	MinFluidToRender = 0.01f;
 }
 
@@ -63,14 +63,8 @@ void UVoxelFluidIntegration::TickComponent(float DeltaTime, ELevelTick TickType,
 	// Terrain updates should be triggered explicitly when needed (e.g., when chunks are loaded)
 	// or manually by the user
 	
-	if (bDebugDrawCells)
-	{
-		if (bUseChunkedSystem)
-		{
-			DrawChunkedDebugFluid();
-		}
-		// Grid debug drawing is handled by FluidVisualizationComponent
-	}
+	// Debug cell drawing is now handled by FluidVisualizationComponent
+	// The bDebugDrawCells setting is deprecated - use the visualization component instead
 }
 
 void UVoxelFluidIntegration::InitializeFluidSystem(AActor* InVoxelWorld)

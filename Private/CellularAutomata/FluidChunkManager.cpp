@@ -85,6 +85,8 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 	{
 		StatsUpdateTimer = 0.0f;
 		CachedStats = GetStats();
+		
+		// Update chunk stats
 		SET_DWORD_STAT(STAT_VoxelFluid_LoadedChunks, CachedStats.TotalChunks);
 		SET_DWORD_STAT(STAT_VoxelFluid_ActiveChunks, CachedStats.ActiveChunks);
 		SET_DWORD_STAT(STAT_VoxelFluid_InactiveChunks, CachedStats.InactiveChunks);
@@ -92,6 +94,19 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 		SET_DWORD_STAT(STAT_VoxelFluid_ChunkLoadQueueSize, CachedStats.ChunkLoadQueueSize);
 		SET_DWORD_STAT(STAT_VoxelFluid_ChunkUnloadQueueSize, CachedStats.ChunkUnloadQueueSize);
 		SET_FLOAT_STAT(STAT_VoxelFluid_AvgChunkUpdateTime, CachedStats.AverageChunkUpdateTime);
+		
+		// Update player position and streaming settings
+		if (ViewerPositions.Num() > 0)
+		{
+			const FVector& PlayerPos = ViewerPositions[0];
+			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosX, PlayerPos.X);
+			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosY, PlayerPos.Y);
+			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosZ, PlayerPos.Z);
+		}
+		
+		SET_FLOAT_STAT(STAT_VoxelFluid_ActiveDistance, StreamingConfig.ActiveDistance);
+		SET_FLOAT_STAT(STAT_VoxelFluid_LoadDistance, StreamingConfig.LoadDistance);
+		SET_FLOAT_STAT(STAT_VoxelFluid_CrossChunkFlow, bDebugCrossChunkFlow ? 1.0f : 0.0f);
 	}
 	
 	// Update debug timer (debug drawing is now called externally)
@@ -999,30 +1014,8 @@ void UFluidChunkManager::DrawDebugChunks(UWorld* World) const
 	
 	const FVector PrimaryViewerPos = ViewerPositions[0];
 	
-	// Draw summary stats at the top of the screen
-	if (bShowChunkStates)
-	{
-		const FString SummaryStats = FString::Printf(
-			TEXT("=== CHUNK SYSTEM DEBUG ===\n")
-			TEXT("Player Pos: [%.0f, %.0f, %.0f] | Viewing Range: %.0fm\n")
-			TEXT("Total Loaded: %d | Active: %d | Inactive: %d | Border: %d\n")
-			TEXT("Load Queue: %d | Unload Queue: %d | Update Interval: %.1fs\n")
-			TEXT("Avg Update Time: %.3fms | Cross-Chunk Flow: %s"),
-			PrimaryViewerPos.X, PrimaryViewerPos.Y, PrimaryViewerPos.Z,
-			StreamingConfig.LoadDistance,
-			LoadedChunks.Num(),
-			ActiveChunkCoords.Num(),
-			InactiveChunkCoords.Num(),
-			BorderOnlyChunkCoords.Num(),
-			CachedStats.ChunkLoadQueueSize,
-			CachedStats.ChunkUnloadQueueSize,
-			DebugUpdateInterval,
-			CachedStats.AverageChunkUpdateTime,
-			bDebugCrossChunkFlow ? TEXT("ON") : TEXT("OFF")
-		);
-		
-		DrawDebugString(World, FVector(50, 50, 0), SummaryStats, nullptr, FColor::Cyan, DebugUpdateInterval + 0.1f, true, 1.2f);
-	}
+	// Summary stats are now integrated into 'stat voxelfluid' display
+	// Individual chunk information still shows in world space above each chunk
 	
 	// Create sorted list of chunks by distance to player
 	struct FChunkDistancePair
@@ -1155,16 +1148,7 @@ void UFluidChunkManager::DrawDebugChunks(UWorld* World) const
 		DebugIndex++;
 	}
 	
-	// Show overflow message if there are more chunks
-	if (SortedChunks.Num() > MaxChunksToShow && bShowChunkStates)
-	{
-		const FString OverflowMsg = FString::Printf(
-			TEXT("... and %d more chunks (showing closest %d)"),
-			SortedChunks.Num() - MaxChunksToShow,
-			MaxChunksToShow
-		);
-		DrawDebugString(World, FVector(50, 300, 0), OverflowMsg, nullptr, FColor::Yellow, DebugUpdateInterval + 0.1f, true, 1.0f);
-	}
+	// Overflow information is now available through 'stat voxelfluid' showing total vs active chunk counts
 	
 	// Distance circles removed to avoid intrusive view obstruction
 	// The distance information is still shown in the text display above

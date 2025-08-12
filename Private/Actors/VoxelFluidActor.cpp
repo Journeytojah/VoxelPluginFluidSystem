@@ -187,8 +187,7 @@ void AVoxelFluidActor::InitializeFluidSystem()
 			VoxelIntegration->GridResolutionY = GridSizeY;
 			VoxelIntegration->GridResolutionZ = GridSizeZ;
 			VoxelIntegration->CellWorldSize = CellSize;
-			VoxelIntegration->bDebugDrawCells = bShowDebugGrid;
-			VoxelIntegration->bEnableFlowVisualization = bShowFlowVectors;
+			// Legacy debug properties removed - FluidVisualizationComponent handles debug drawing
 			
 			if (TargetVoxelWorld)
 			{
@@ -211,8 +210,7 @@ void AVoxelFluidActor::InitializeFluidSystem()
 			VoxelIntegration->GridResolutionY = GridSizeY;
 			VoxelIntegration->GridResolutionZ = GridSizeZ;
 			VoxelIntegration->CellWorldSize = CellSize;
-			VoxelIntegration->bDebugDrawCells = bShowDebugGrid;
-			VoxelIntegration->bEnableFlowVisualization = bShowFlowVectors;
+			// Legacy debug properties removed - FluidVisualizationComponent handles debug drawing
 			
 			if (TargetVoxelWorld)
 			{
@@ -471,8 +469,7 @@ void AVoxelFluidActor::UpdateDebugVisualization()
 	
 	if (VoxelIntegration)
 	{
-		VoxelIntegration->bDebugDrawCells = bShowDebugGrid;
-		VoxelIntegration->bEnableFlowVisualization = bShowFlowVectors;
+		// Legacy VoxelIntegration debug properties removed - handled by VisualizationComponent now
 	}
 	
 	if (VisualizationComponent)
