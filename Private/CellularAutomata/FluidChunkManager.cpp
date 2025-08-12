@@ -86,7 +86,7 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 		StatsUpdateTimer = 0.0f;
 		CachedStats = GetStats();
 		
-		// Update chunk stats
+		// === Chunk System Statistics ===
 		SET_DWORD_STAT(STAT_VoxelFluid_LoadedChunks, CachedStats.TotalChunks);
 		SET_DWORD_STAT(STAT_VoxelFluid_ActiveChunks, CachedStats.ActiveChunks);
 		SET_DWORD_STAT(STAT_VoxelFluid_InactiveChunks, CachedStats.InactiveChunks);
@@ -95,7 +95,42 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 		SET_DWORD_STAT(STAT_VoxelFluid_ChunkUnloadQueueSize, CachedStats.ChunkUnloadQueueSize);
 		SET_FLOAT_STAT(STAT_VoxelFluid_AvgChunkUpdateTime, CachedStats.AverageChunkUpdateTime);
 		
-		// Update player position and streaming settings
+		// === Fluid Cell Statistics ===
+		SET_DWORD_STAT(STAT_VoxelFluid_ActiveCells, CachedStats.TotalActiveCells);
+		SET_DWORD_STAT(STAT_VoxelFluid_TotalCells, CachedStats.TotalChunks * ChunkSize * ChunkSize * ChunkSize);
+		SET_FLOAT_STAT(STAT_VoxelFluid_TotalVolume, CachedStats.TotalFluidVolume);
+		
+		// Calculate additional fluid statistics
+		int32 SignificantCells = 0;
+		float TotalFluidLevels = 0.0f;
+		int32 CellsWithFluid = 0;
+		
+		for (const auto& ChunkPair : LoadedChunks)
+		{
+			UFluidChunk* Chunk = ChunkPair.Value;
+			if (Chunk && Chunk->State != EChunkState::Unloaded)
+			{
+				for (int32 i = 0; i < Chunk->Cells.Num(); ++i)
+				{
+					const float FluidLevel = Chunk->Cells[i].FluidLevel;
+					if (FluidLevel > 0.0f)
+					{
+						TotalFluidLevels += FluidLevel;
+						CellsWithFluid++;
+						
+						if (FluidLevel > 0.1f)
+						{
+							SignificantCells++;
+						}
+					}
+				}
+			}
+		}
+		
+		SET_DWORD_STAT(STAT_VoxelFluid_SignificantCells, SignificantCells);
+		SET_FLOAT_STAT(STAT_VoxelFluid_AvgFluidLevel, CellsWithFluid > 0 ? TotalFluidLevels / CellsWithFluid : 0.0f);
+		
+		// === Player & World Information ===
 		if (ViewerPositions.Num() > 0)
 		{
 			const FVector& PlayerPos = ViewerPositions[0];
@@ -103,10 +138,17 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosY, PlayerPos.Y);
 			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosZ, PlayerPos.Z);
 		}
+		else
+		{
+			// Clear player position if no viewers
+			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosX, 0.0f);
+			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosY, 0.0f);
+			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosZ, 0.0f);
+		}
 		
 		SET_FLOAT_STAT(STAT_VoxelFluid_ActiveDistance, StreamingConfig.ActiveDistance);
 		SET_FLOAT_STAT(STAT_VoxelFluid_LoadDistance, StreamingConfig.LoadDistance);
-		SET_FLOAT_STAT(STAT_VoxelFluid_CrossChunkFlow, bDebugCrossChunkFlow ? 1.0f : 0.0f);
+		SET_DWORD_STAT(STAT_VoxelFluid_CrossChunkFlow, bDebugCrossChunkFlow ? 1 : 0);
 	}
 	
 	// Update debug timer (debug drawing is now called externally)

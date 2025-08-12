@@ -671,8 +671,18 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 	if (!ChunkManager)
 		return;
 		
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_MarchingCubes);
+	
 	const FVector ViewerPos = GetPrimaryViewerPosition();
 	const TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
+	
+	// Reset rendering stats counters
+	int32 RenderedChunks = 0;
+	int32 CachedMeshesUsed = 0;
+	int32 MeshesGenerated = 0;
+	int32 LOD0Meshes = 0;
+	int32 LOD1Meshes = 0;
+	int32 LOD2Meshes = 0;
 	
 	// Step 1: Clean up meshes for chunks that are no longer active or out of range
 	TArray<UFluidChunk*> ChunksToRemove;
@@ -766,6 +776,7 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 			UVs = StoredData.UVs;
 			VertexColors = StoredData.VertexColors;
 			bUsedCachedMesh = true;
+			CachedMeshesUsed++;
 		}
 		else
 		{
@@ -817,7 +828,16 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 				
 				// Store the generated mesh data for persistence
 				Chunk->StoreMeshData(Vertices, Triangles, Normals, UVs, VertexColors, MarchingCubesIsoLevel, LODLevel);
+				MeshesGenerated++;
 			}
+		}
+		
+		// Count LOD statistics
+		switch (LODLevel)
+		{
+			case 0: LOD0Meshes++; break;
+			case 1: LOD1Meshes++; break;
+			case 2: LOD2Meshes++; break;
 		}
 		
 		if (Vertices.Num() > 0)
@@ -825,6 +845,7 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 			// Update procedural mesh with either cached or newly generated data
 			ChunkMesh->ClearAllMeshSections();
 			ChunkMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UVs, VertexColors, TArray<FProcMeshTangent>(), bGenerateCollision);
+			RenderedChunks++;
 		}
 		else
 		{
@@ -832,6 +853,14 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 			ChunkMesh->ClearAllMeshSections();
 		}
 	}
+	
+	// === Update Rendering Statistics ===
+	SET_DWORD_STAT(STAT_VoxelFluid_RenderedChunks, RenderedChunks);
+	SET_DWORD_STAT(STAT_VoxelFluid_CachedMeshes, CachedMeshesUsed);
+	SET_DWORD_STAT(STAT_VoxelFluid_GeneratedMeshes, MeshesGenerated);
+	SET_DWORD_STAT(STAT_VoxelFluid_LOD0Meshes, LOD0Meshes);
+	SET_DWORD_STAT(STAT_VoxelFluid_LOD1Meshes, LOD1Meshes);
+	SET_DWORD_STAT(STAT_VoxelFluid_LOD2Meshes, LOD2Meshes);
 }
 
 void UFluidVisualizationComponent::UpdateDensityInterpolation(float DeltaTime)

@@ -88,8 +88,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Visualization")
 	bool bUseLODForVisualization = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "0.01", ClampMax = "1.0"))
-	float MarchingCubesIsoLevel = 0.1f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "0.0001", ClampMax = "1.0"))
+	float MarchingCubesIsoLevel = 0.01f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
 	bool bSmoothNormals = true;
