@@ -674,12 +674,57 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 	const FVector ViewerPos = GetPrimaryViewerPosition();
 	const TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
 	
-	// Process each active chunk
+	// Step 1: Clean up meshes for chunks that are no longer active or out of range
+	TArray<UFluidChunk*> ChunksToRemove;
+	for (auto& ChunkMeshPair : ChunkMarchingCubesMeshes)
+	{
+		UFluidChunk* Chunk = ChunkMeshPair.Key;
+		UProceduralMeshComponent* ChunkMesh = ChunkMeshPair.Value;
+		
+		// Check if chunk is still active and within render range
+		bool bShouldKeep = false;
+		if (Chunk && ChunkMesh)
+		{
+			// Check if chunk is still in active chunks list
+			if (ActiveChunks.Contains(Chunk))
+			{
+				// Check if chunk should still be rendered based on distance and state
+				if (ShouldRenderChunk(Chunk, ViewerPos))
+				{
+					bShouldKeep = true;
+				}
+			}
+		}
+		
+		if (!bShouldKeep)
+		{
+			// Clean up the mesh component
+			if (ChunkMesh && IsValid(ChunkMesh))
+			{
+				ChunkMesh->ClearAllMeshSections();
+				ChunkMesh->DestroyComponent();
+			}
+			ChunksToRemove.Add(Chunk);
+		}
+	}
+	
+	// Remove cleaned up chunks from our tracking map
+	for (UFluidChunk* ChunkToRemove : ChunksToRemove)
+	{
+		ChunkMarchingCubesMeshes.Remove(ChunkToRemove);
+	}
+	
+	// Step 2: Process each active chunk that should be rendered
 	for (UFluidChunk* Chunk : ActiveChunks)
 	{
 		if (!ShouldRenderChunk(Chunk, ViewerPos))
 			continue;
 			
+		// Calculate LOD level based on distance
+		const FBox ChunkBounds = Chunk->GetWorldBounds();
+		const float Distance = FVector::Dist(ChunkBounds.GetCenter(), ViewerPos);
+		int32 LODLevel = CalculateLODLevel(Distance);
+		
 		// Get or create procedural mesh component for this chunk
 		UProceduralMeshComponent* ChunkMesh = nullptr;
 		
@@ -701,49 +746,83 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 			ChunkMarchingCubesMeshes.Add(Chunk, ChunkMesh);
 		}
 		
-		// Generate marching cubes mesh for this chunk with seamless cross-chunk boundaries
-		TArray<FMarchingCubes::FMarchingCubesVertex> MarchingVertices;
-		TArray<FMarchingCubes::FMarchingCubesTriangle> MarchingTriangles;
-		
-		FMarchingCubes::GenerateSeamlessChunkMesh(Chunk, ChunkManager, MarchingCubesIsoLevel, MarchingVertices, MarchingTriangles);
-		
-		// Convert to UE4 procedural mesh format
+		// Check if we can use cached mesh data first
 		TArray<FVector> Vertices;
 		TArray<int32> Triangles;
 		TArray<FVector> Normals;
 		TArray<FVector2D> UVs;
 		TArray<FColor> VertexColors;
 		
-		if (MarchingVertices.Num() > 0)
+		bool bUsedCachedMesh = false;
+		
+		// Try to use cached mesh data if available and valid
+		if (Chunk->HasValidMeshData(LODLevel, MarchingCubesIsoLevel))
 		{
-			Vertices.Reserve(MarchingVertices.Num());
-			Normals.Reserve(MarchingVertices.Num());
-			UVs.Reserve(MarchingVertices.Num());
-			VertexColors.Reserve(MarchingVertices.Num());
-			Triangles.Reserve(MarchingTriangles.Num() * 3);
+			// Use stored mesh data
+			const FChunkMeshData& StoredData = Chunk->StoredMeshData;
+			Vertices = StoredData.Vertices;
+			Triangles = StoredData.Triangles;
+			Normals = StoredData.Normals;
+			UVs = StoredData.UVs;
+			VertexColors = StoredData.VertexColors;
+			bUsedCachedMesh = true;
+		}
+		else
+		{
+			// Generate new mesh data
+			TArray<FMarchingCubes::FMarchingCubesVertex> MarchingVertices;
+			TArray<FMarchingCubes::FMarchingCubesTriangle> MarchingTriangles;
 			
-			// Convert vertices
-			for (const auto& MarchingVertex : MarchingVertices)
+			GenerateChunkMeshWithLOD(Chunk, LODLevel, MarchingVertices, MarchingTriangles);
+			
+			// Convert to UE4 procedural mesh format
+			if (MarchingVertices.Num() > 0)
 			{
-				Vertices.Add(MarchingVertex.Position);
-				Normals.Add(bFlipNormals ? -MarchingVertex.Normal : MarchingVertex.Normal);
-				UVs.Add(MarchingVertex.UV);
+				Vertices.Reserve(MarchingVertices.Num());
+				Normals.Reserve(MarchingVertices.Num());
+				UVs.Reserve(MarchingVertices.Num());
+				VertexColors.Reserve(MarchingVertices.Num());
+				Triangles.Reserve(MarchingTriangles.Num() * 3);
 				
-				// Color based on height for visual interest
-				const float HeightFactor = FMath::Clamp((MarchingVertex.Position.Z - Chunk->ChunkWorldPosition.Z) / (Chunk->ChunkSize * Chunk->CellSize), 0.0f, 1.0f);
-				const FColor VertexColor = FColor::MakeRedToGreenColorFromScalar(HeightFactor);
-				VertexColors.Add(VertexColor);
+				// Convert vertices
+				for (const auto& MarchingVertex : MarchingVertices)
+				{
+					Vertices.Add(MarchingVertex.Position);
+					Normals.Add(bFlipNormals ? -MarchingVertex.Normal : MarchingVertex.Normal);
+					UVs.Add(MarchingVertex.UV);
+					
+					// Color based on height for visual interest (fade with LOD)
+					const float HeightFactor = FMath::Clamp((MarchingVertex.Position.Z - Chunk->ChunkWorldPosition.Z) / (Chunk->ChunkSize * Chunk->CellSize), 0.0f, 1.0f);
+					FColor VertexColor = FColor::MakeRedToGreenColorFromScalar(HeightFactor);
+					
+					// Fade color with distance/LOD for performance indication
+					if (LODLevel > 0)
+					{
+						const float LODFade = FMath::Clamp(1.0f - (LODLevel * 0.2f), 0.5f, 1.0f);
+						VertexColor.R = (uint8)(VertexColor.R * LODFade);
+						VertexColor.G = (uint8)(VertexColor.G * LODFade);
+						VertexColor.B = (uint8)(VertexColor.B * LODFade);
+					}
+					
+					VertexColors.Add(VertexColor);
+				}
+				
+				// Convert triangles (correct winding order for upward-facing normals)
+				for (const auto& MarchingTriangle : MarchingTriangles)
+				{
+					Triangles.Add(MarchingTriangle.VertexIndices[0]);
+					Triangles.Add(MarchingTriangle.VertexIndices[1]);
+					Triangles.Add(MarchingTriangle.VertexIndices[2]);
+				}
+				
+				// Store the generated mesh data for persistence
+				Chunk->StoreMeshData(Vertices, Triangles, Normals, UVs, VertexColors, MarchingCubesIsoLevel, LODLevel);
 			}
-			
-			// Convert triangles (correct winding order for upward-facing normals)
-			for (const auto& MarchingTriangle : MarchingTriangles)
-			{
-				Triangles.Add(MarchingTriangle.VertexIndices[0]);
-				Triangles.Add(MarchingTriangle.VertexIndices[1]);
-				Triangles.Add(MarchingTriangle.VertexIndices[2]);
-			}
-			
-			// Update procedural mesh
+		}
+		
+		if (Vertices.Num() > 0)
+		{
+			// Update procedural mesh with either cached or newly generated data
 			ChunkMesh->ClearAllMeshSections();
 			ChunkMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UVs, VertexColors, TArray<FProcMeshTangent>(), bGenerateCollision);
 		}
@@ -903,4 +982,48 @@ float UFluidVisualizationComponent::GetSmoothedDensity(const TArray<float>& Dens
 		return 0.0f;
 		
 	return DensityGrid[Index];
+}
+
+int32 UFluidVisualizationComponent::CalculateLODLevel(float Distance) const
+{
+	// Use the chunk system's LOD distances from VoxelFluidActor
+	// LOD 0: Close detail (0 to LOD1Distance)
+	// LOD 1: Medium detail (LOD1Distance to LOD2Distance) 
+	// LOD 2: Low detail (LOD2Distance to MaxRenderDistance)
+	
+	if (Distance <= 2000.0f) // LOD1Distance equivalent
+	{
+		return 0; // Full detail
+	}
+	else if (Distance <= 4000.0f) // LOD2Distance equivalent  
+	{
+		return 1; // Reduced detail
+	}
+	else
+	{
+		return 2; // Minimal detail
+	}
+}
+
+void UFluidVisualizationComponent::GenerateChunkMeshWithLOD(UFluidChunk* Chunk, int32 LODLevel, TArray<FMarchingCubes::FMarchingCubesVertex>& OutVertices, TArray<FMarchingCubes::FMarchingCubesTriangle>& OutTriangles)
+{
+	if (!Chunk || !ChunkManager)
+		return;
+		
+	// Adjust marching cubes generation based on LOD level
+	switch (LODLevel)
+	{
+		case 0: // Full detail - use seamless generation
+			FMarchingCubes::GenerateSeamlessChunkMesh(Chunk, ChunkManager, MarchingCubesIsoLevel, OutVertices, OutTriangles);
+			break;
+			
+		case 1: // Medium detail - use regular generation with slightly higher iso level for performance
+			FMarchingCubes::GenerateSeamlessChunkMesh(Chunk, ChunkManager, MarchingCubesIsoLevel * 1.2f, OutVertices, OutTriangles);
+			break;
+			
+		case 2: // Low detail - use basic generation without seamless boundaries for best performance
+		default:
+			FMarchingCubes::GenerateChunkMesh(Chunk, MarchingCubesIsoLevel * 1.5f, OutVertices, OutTriangles);
+			break;
+	}
 }

@@ -145,6 +145,7 @@ void UFluidChunk::AddFluid(int32 LocalX, int32 LocalY, int32 LocalZ, float Amoun
 	{
 		Cells[Idx].FluidLevel = FMath::Min(Cells[Idx].FluidLevel + Amount, MaxFluidLevel);
 		bDirty = true;
+		bMeshDataDirty = true; // Mark mesh data as dirty when fluid changes
 	}
 }
 
@@ -155,6 +156,7 @@ void UFluidChunk::RemoveFluid(int32 LocalX, int32 LocalY, int32 LocalZ, float Am
 	{
 		Cells[Idx].FluidLevel = FMath::Max(Cells[Idx].FluidLevel - Amount, 0.0f);
 		bDirty = true;
+		bMeshDataDirty = true; // Mark mesh data as dirty when fluid changes
 	}
 }
 
@@ -576,4 +578,76 @@ void UFluidChunk::ProcessBorderFlow(float DeltaTime)
 	FScopeLock Lock(&BorderDataMutex);
 	
 	bBorderDirty = false;
+}
+
+void UFluidChunk::StoreMeshData(const TArray<FVector>& Vertices, const TArray<int32>& Triangles, 
+								const TArray<FVector>& Normals, const TArray<FVector2D>& UVs, 
+								const TArray<FColor>& VertexColors, float IsoLevel, int32 LODLevel)
+{
+	// Store mesh data for persistence
+	StoredMeshData.Vertices = Vertices;
+	StoredMeshData.Triangles = Triangles;
+	StoredMeshData.Normals = Normals;
+	StoredMeshData.UVs = UVs;
+	StoredMeshData.VertexColors = VertexColors;
+	StoredMeshData.GeneratedIsoLevel = IsoLevel;
+	StoredMeshData.GeneratedLOD = LODLevel;
+	StoredMeshData.GenerationTimestamp = FPlatformTime::Seconds();
+	StoredMeshData.FluidStateHash = CalculateFluidStateHash();
+	StoredMeshData.bIsValid = true;
+	
+	// Mark mesh data as clean since we just generated it
+	bMeshDataDirty = false;
+}
+
+bool UFluidChunk::HasValidMeshData(int32 DesiredLOD, float DesiredIsoLevel) const
+{
+	if (bMeshDataDirty)
+		return false;
+		
+	// Check if stored mesh is valid for current fluid state
+	uint32 CurrentFluidHash = CalculateFluidStateHash();
+	if (CurrentFluidHash != StoredMeshData.FluidStateHash)
+		return false;
+		
+	return StoredMeshData.IsValidForLOD(DesiredLOD, DesiredIsoLevel);
+}
+
+void UFluidChunk::ClearMeshData()
+{
+	StoredMeshData.Clear();
+	bMeshDataDirty = true;
+}
+
+void UFluidChunk::MarkMeshDataDirty()
+{
+	bMeshDataDirty = true;
+}
+
+uint32 UFluidChunk::CalculateFluidStateHash() const
+{
+	// Create a hash of the current fluid state for dirty checking
+	uint32 Hash = 0;
+	
+	// Hash fluid level data (sample every few cells for performance)
+	const int32 SampleStep = FMath::Max(1, ChunkSize / 8); // Sample 8x8x8 grid
+	
+	for (int32 X = 0; X < ChunkSize; X += SampleStep)
+	{
+		for (int32 Y = 0; Y < ChunkSize; Y += SampleStep)
+		{
+			for (int32 Z = 0; Z < ChunkSize; Z += SampleStep)
+			{
+				const int32 Index = GetLocalCellIndex(X, Y, Z);
+				if (Index >= 0 && Index < Cells.Num())
+				{
+					// Hash fluid level as fixed point to avoid floating point precision issues
+					const uint32 FluidLevel = (uint32)(Cells[Index].FluidLevel * 1000.0f);
+					Hash = HashCombine(Hash, FluidLevel);
+				}
+			}
+		}
+	}
+	
+	return Hash;
 }

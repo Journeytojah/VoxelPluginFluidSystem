@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/PrimitiveComponent.h"
+#include "Visualization/MarchingCubes.h"
 #include "FluidVisualizationComponent.generated.h"
 
 class UCAFluidGrid;
@@ -10,6 +11,7 @@ class UMaterialInterface;
 class UInstancedStaticMeshComponent;
 class UFluidChunk;
 class UProceduralMeshComponent;
+class FMarchingCubes;
 
 UENUM(BlueprintType)
 enum class EFluidRenderMode : uint8
@@ -157,6 +159,8 @@ private:
 	bool ShouldRenderChunk(UFluidChunk* Chunk, const FVector& ViewerPosition) const;
 	FVector GetPrimaryViewerPosition() const;
 	void DrawChunkBounds() const;
+	int32 CalculateLODLevel(float Distance) const;
+	void GenerateChunkMeshWithLOD(UFluidChunk* Chunk, int32 LODLevel, TArray<FMarchingCubes::FMarchingCubesVertex>& OutVertices, TArray<FMarchingCubes::FMarchingCubesTriangle>& OutTriangles);
 	
 	TMap<UFluidChunk*, UInstancedStaticMeshComponent*> ChunkMeshComponents;
 	TMap<UFluidChunk*, UProceduralMeshComponent*> ChunkMarchingCubesMeshes;

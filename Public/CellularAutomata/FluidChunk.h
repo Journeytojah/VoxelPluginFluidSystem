@@ -4,6 +4,71 @@
 #include "CAFluidGrid.h"
 #include "FluidChunk.generated.h"
 
+// Structure to store serialized mesh data for chunk persistence
+USTRUCT()
+struct FChunkMeshData
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	TArray<FVector> Vertices;
+	
+	UPROPERTY()
+	TArray<int32> Triangles;
+	
+	UPROPERTY()
+	TArray<FVector> Normals;
+	
+	UPROPERTY()
+	TArray<FVector2D> UVs;
+	
+	UPROPERTY()
+	TArray<FColor> VertexColors;
+	
+	UPROPERTY()
+	float GeneratedIsoLevel = 0.1f;
+	
+	UPROPERTY()
+	int32 GeneratedLOD = 0;
+	
+	UPROPERTY()
+	float GenerationTimestamp = 0.0f;
+	
+	UPROPERTY()
+	bool bIsValid = false;
+	
+	// Hash of fluid state when mesh was generated (for dirty checking)
+	UPROPERTY()
+	uint32 FluidStateHash = 0;
+
+	FChunkMeshData()
+	{
+		Vertices.Empty();
+		Triangles.Empty();
+		Normals.Empty();
+		UVs.Empty();
+		VertexColors.Empty();
+	}
+	
+	void Clear()
+	{
+		Vertices.Empty();
+		Triangles.Empty();
+		Normals.Empty();
+		UVs.Empty();
+		VertexColors.Empty();
+		bIsValid = false;
+		FluidStateHash = 0;
+	}
+	
+	bool IsValidForLOD(int32 DesiredLOD, float DesiredIsoLevel) const
+	{
+		return bIsValid && 
+			   GeneratedLOD <= DesiredLOD && // Can use higher quality mesh for lower LOD
+			   FMath::IsNearlyEqual(GeneratedIsoLevel, DesiredIsoLevel, 0.01f);
+	}
+};
+
 USTRUCT(BlueprintType)
 struct VOXELFLUIDSYSTEM_API FFluidChunkCoord
 {
@@ -114,6 +179,15 @@ public:
 	void ClearChunk();
 	
 	int32 GetLocalCellIndex(int32 X, int32 Y, int32 Z) const;
+	
+	// Mesh persistence methods
+	void StoreMeshData(const TArray<FVector>& Vertices, const TArray<int32>& Triangles, 
+					   const TArray<FVector>& Normals, const TArray<FVector2D>& UVs, 
+					   const TArray<FColor>& VertexColors, float IsoLevel, int32 LODLevel);
+	bool HasValidMeshData(int32 DesiredLOD, float DesiredIsoLevel) const;
+	void ClearMeshData();
+	void MarkMeshDataDirty();
+	uint32 CalculateFluidStateHash() const;
 
 public:
 	UPROPERTY(BlueprintReadOnly)
@@ -145,6 +219,13 @@ public:
 	
 	UPROPERTY(BlueprintReadOnly)
 	int32 CurrentLOD = 0;
+	
+	// Mesh persistence data
+	UPROPERTY()
+	FChunkMeshData StoredMeshData;
+	
+	UPROPERTY()
+	bool bMeshDataDirty = true;
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
 	float FlowRate = 0.5f;
