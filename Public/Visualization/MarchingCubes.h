@@ -112,6 +112,20 @@ public:
                                 TArray<FMarchingCubesVertex>& OutVertices,
                                 TArray<FMarchingCubesTriangle>& OutTriangles);
 
+    /**
+     * Generate mesh for a fluid chunk with cross-chunk boundary interpolation
+     * @param FluidChunk - The chunk containing fluid density data
+     * @param ChunkManager - Manager for accessing neighboring chunks
+     * @param IsoLevel - The density threshold for surface generation
+     * @param OutVertices - Generated vertices
+     * @param OutTriangles - Generated triangles
+     */
+    static void GenerateSeamlessChunkMesh(class UFluidChunk* FluidChunk,
+                                        class UFluidChunkManager* ChunkManager,
+                                        float IsoLevel,
+                                        TArray<FMarchingCubesVertex>& OutVertices,
+                                        TArray<FMarchingCubesTriangle>& OutTriangles);
+
 private:
     /**
      * Interpolate vertex position along an edge based on density values

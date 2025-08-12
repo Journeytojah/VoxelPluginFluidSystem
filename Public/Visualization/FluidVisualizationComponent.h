@@ -107,6 +107,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "0.001", ClampMax = "0.1"))
 	float MeshUpdateThreshold = 0.01f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
+	bool bEnableDensitySmoothing = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "1", ClampMax = "5"))
+	int32 SmoothingIterations = 2;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float SmoothingStrength = 0.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
+	bool bEnableGapFilling = true;
+
 private:
 	UPROPERTY()
 	UCAFluidGrid* FluidGrid;
@@ -138,6 +150,9 @@ private:
 	void UpdateDensityInterpolation(float DeltaTime);
 	void InterpolateDensityGrids();
 	bool ShouldUpdateMesh(const TArray<float>& NewDensityGrid) const;
+	void SmoothDensityGrid(TArray<float>& DensityGrid, const FIntVector& GridSize) const;
+	void ApplyGaussianSmoothing(TArray<float>& DensityGrid, const FIntVector& GridSize, float Strength) const;
+	float GetSmoothedDensity(const TArray<float>& DensityGrid, const FIntVector& GridSize, int32 X, int32 Y, int32 Z) const;
 	void RenderFluidChunk(UFluidChunk* Chunk, const FVector& ViewerPosition);
 	bool ShouldRenderChunk(UFluidChunk* Chunk, const FVector& ViewerPosition) const;
 	FVector GetPrimaryViewerPosition() const;

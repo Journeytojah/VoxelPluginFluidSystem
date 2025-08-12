@@ -1,5 +1,6 @@
 #include "Visualization/MarchingCubes.h"
 #include "CellularAutomata/FluidChunk.h"
+#include "CellularAutomata/FluidChunkManager.h"
 
 // === COMPLETE MARCHING CUBES LOOKUP TABLES ===
 
@@ -478,16 +479,132 @@ void FMarchingCubes::GenerateChunkMesh(UFluidChunk* FluidChunk, float IsoLevel,
     }
 }
 
+void FMarchingCubes::GenerateSeamlessChunkMesh(UFluidChunk* FluidChunk, UFluidChunkManager* ChunkManager, float IsoLevel,
+                                             TArray<FMarchingCubesVertex>& OutVertices,
+                                             TArray<FMarchingCubesTriangle>& OutTriangles)
+{
+    if (!FluidChunk || !ChunkManager)
+        return;
+        
+    OutVertices.Empty();
+    OutTriangles.Empty();
+    
+    const int32 ChunkSize = FluidChunk->ChunkSize;
+    const float CellSize = FluidChunk->CellSize;
+    const FVector ChunkOrigin = FluidChunk->ChunkWorldPosition;
+    
+    // Helper function to get density with boundary extension
+    auto GetExtendedDensity = [&](const FVector& WorldPos, int32 LocalX, int32 LocalY, int32 LocalZ) -> float
+    {
+        // First try to get density from chunk manager
+        float Density = ChunkManager->GetFluidAtWorldPosition(WorldPos);
+        
+        // If we're at chunk boundary and neighbor chunk is empty/unloaded, 
+        // extend density from within this chunk to prevent gaps
+        if (Density <= 0.0f)
+        {
+            // Check if we're at a chunk boundary
+            bool bAtBoundary = (LocalX < 0 || LocalX >= ChunkSize || 
+                               LocalY < 0 || LocalY >= ChunkSize || 
+                               LocalZ < 0 || LocalZ >= ChunkSize);
+            
+            if (bAtBoundary)
+            {
+                // Find the nearest valid cell within this chunk and extend its density
+                int32 ClampedX = FMath::Clamp(LocalX, 0, ChunkSize - 1);
+                int32 ClampedY = FMath::Clamp(LocalY, 0, ChunkSize - 1);
+                int32 ClampedZ = FMath::Clamp(LocalZ, 0, ChunkSize - 1);
+                
+                float NearestDensity = FluidChunk->GetFluidAt(ClampedX, ClampedY, ClampedZ);
+                
+                // Only extend if there's actually fluid nearby to prevent false surfaces
+                if (NearestDensity > IsoLevel * 0.1f) // 10% of iso level threshold
+                {
+                    // Calculate distance from boundary for falloff
+                    float DistanceX = LocalX < 0 ? -LocalX : (LocalX >= ChunkSize ? LocalX - ChunkSize + 1 : 0);
+                    float DistanceY = LocalY < 0 ? -LocalY : (LocalY >= ChunkSize ? LocalY - ChunkSize + 1 : 0);
+                    float DistanceZ = LocalZ < 0 ? -LocalZ : (LocalZ >= ChunkSize ? LocalZ - ChunkSize + 1 : 0);
+                    float DistanceFromBoundary = FMath::Min3(DistanceX, DistanceY, DistanceZ);
+                    
+                    // Smooth falloff over 2-3 cells to prevent sharp edges
+                    float Falloff = FMath::Exp(-DistanceFromBoundary * 0.5f);
+                    Density = NearestDensity * Falloff;
+                }
+            }
+        }
+        
+        return Density;
+    };
+    
+    // Process each cube in the chunk, INCLUDING boundary cubes
+    // Extend 1 cell beyond chunk boundaries to ensure seamless transitions
+    for (int32 X = -1; X < ChunkSize; ++X)
+    {
+        for (int32 Y = -1; Y < ChunkSize; ++Y)
+        {
+            for (int32 Z = -1; Z < ChunkSize; ++Z)
+            {
+                FCubeConfiguration Config;
+                
+                // Set up the cube configuration
+                const FVector CubeOrigin = ChunkOrigin + FVector(X, Y, Z) * CellSize;
+                
+                // Fill in corner positions and density values
+                for (int32 CornerIndex = 0; CornerIndex < 8; ++CornerIndex)
+                {
+                    const FVector RelativeCorner = CubeCorners[CornerIndex];
+                    Config.Positions[CornerIndex] = CubeOrigin + RelativeCorner * CellSize;
+                    
+                    // Calculate local coordinates for this corner
+                    const int32 CornerX = X + (int32)RelativeCorner.X;
+                    const int32 CornerY = Y + (int32)RelativeCorner.Y;
+                    const int32 CornerZ = Z + (int32)RelativeCorner.Z;
+                    
+                    // Use extended density sampling that handles boundaries
+                    Config.DensityValues[CornerIndex] = GetExtendedDensity(Config.Positions[CornerIndex], CornerX, CornerY, CornerZ);
+                }
+                
+                // Only generate cube if it has some non-zero density to avoid empty space processing
+                bool bHasFluid = false;
+                for (int32 i = 0; i < 8; ++i)
+                {
+                    if (Config.DensityValues[i] > IsoLevel * 0.01f) // Very small threshold
+                    {
+                        bHasFluid = true;
+                        break;
+                    }
+                }
+                
+                if (bHasFluid)
+                {
+                    // Generate mesh for this cube
+                    GenerateCube(Config, IsoLevel, OutVertices, OutTriangles);
+                }
+            }
+        }
+    }
+}
+
 FVector FMarchingCubes::InterpolateVertex(const FVector& P1, const FVector& P2, float V1, float V2, float IsoLevel)
 {
-    if (FMath::Abs(IsoLevel - V1) < 0.00001f)
+    const float Epsilon = 0.00001f;
+    
+    // Handle edge cases
+    if (FMath::Abs(IsoLevel - V1) < Epsilon)
         return P1;
-    if (FMath::Abs(IsoLevel - V2) < 0.00001f)
+    if (FMath::Abs(IsoLevel - V2) < Epsilon)
         return P2;
-    if (FMath::Abs(V1 - V2) < 0.00001f)
+    if (FMath::Abs(V1 - V2) < Epsilon)
         return P1;
         
-    const float Mu = (IsoLevel - V1) / (V2 - V1);
+    // Calculate interpolation factor with clamping to prevent overshooting
+    float Mu = (IsoLevel - V1) / (V2 - V1);
+    
+    // Apply slight smoothing to reduce sharp transitions that cause gaps
+    // Use smoothstep-like interpolation for better surface continuity
+    Mu = FMath::Clamp(Mu, 0.0f, 1.0f);
+    Mu = Mu * Mu * (3.0f - 2.0f * Mu); // Smoothstep function
+    
     return P1 + Mu * (P2 - P1);
 }
 

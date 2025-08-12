@@ -580,6 +580,12 @@ void UFluidVisualizationComponent::GenerateMarchingCubesVisualization()
 		}
 	}
 	
+	// Apply density smoothing to reduce gaps
+	if (bEnableDensitySmoothing)
+	{
+		SmoothDensityGrid(NewDensityGrid, FIntVector(GridSizeX, GridSizeY, GridSizeZ));
+	}
+	
 	// Use smooth interpolation if enabled
 	TArray<float> DensityGrid;
 	if (bSmoothMeshUpdates)
@@ -695,11 +701,11 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 			ChunkMarchingCubesMeshes.Add(Chunk, ChunkMesh);
 		}
 		
-		// Generate marching cubes mesh for this chunk
+		// Generate marching cubes mesh for this chunk with seamless cross-chunk boundaries
 		TArray<FMarchingCubes::FMarchingCubesVertex> MarchingVertices;
 		TArray<FMarchingCubes::FMarchingCubesTriangle> MarchingTriangles;
 		
-		FMarchingCubes::GenerateChunkMesh(Chunk, MarchingCubesIsoLevel, MarchingVertices, MarchingTriangles);
+		FMarchingCubes::GenerateSeamlessChunkMesh(Chunk, ChunkManager, MarchingCubesIsoLevel, MarchingVertices, MarchingTriangles);
 		
 		// Convert to UE4 procedural mesh format
 		TArray<FVector> Vertices;
@@ -788,4 +794,113 @@ bool UFluidVisualizationComponent::ShouldUpdateMesh(const TArray<float>& NewDens
 	}
 	
 	return MaxDifference > MeshUpdateThreshold;
+}
+
+void UFluidVisualizationComponent::SmoothDensityGrid(TArray<float>& DensityGrid, const FIntVector& GridSize) const
+{
+	if (!bEnableDensitySmoothing || SmoothingIterations <= 0)
+		return;
+	
+	// Apply multiple passes of smoothing
+	for (int32 Iteration = 0; Iteration < SmoothingIterations; ++Iteration)
+	{
+		ApplyGaussianSmoothing(DensityGrid, GridSize, SmoothingStrength);
+	}
+}
+
+void UFluidVisualizationComponent::ApplyGaussianSmoothing(TArray<float>& DensityGrid, const FIntVector& GridSize, float Strength) const
+{
+	TArray<float> SmoothedGrid = DensityGrid;
+	
+	// Apply 3x3x3 gaussian-like kernel smoothing
+	for (int32 X = 1; X < GridSize.X - 1; ++X)
+	{
+		for (int32 Y = 1; Y < GridSize.Y - 1; ++Y)
+		{
+			for (int32 Z = 1; Z < GridSize.Z - 1; ++Z)
+			{
+				const int32 CenterIndex = X + Y * GridSize.X + Z * GridSize.X * GridSize.Y;
+				const float CenterValue = DensityGrid[CenterIndex];
+				
+				// Calculate weighted average of neighbors
+				float WeightedSum = 0.0f;
+				float TotalWeight = 0.0f;
+				
+				// Center weight (highest)
+				const float CenterWeight = 4.0f;
+				WeightedSum += CenterValue * CenterWeight;
+				TotalWeight += CenterWeight;
+				
+				// Face neighbors (medium weight)
+				const float FaceWeight = 2.0f;
+				const int32 FaceOffsets[6][3] = {
+					{-1, 0, 0}, {1, 0, 0},   // X neighbors
+					{0, -1, 0}, {0, 1, 0},   // Y neighbors
+					{0, 0, -1}, {0, 0, 1}    // Z neighbors
+				};
+				
+				for (int32 i = 0; i < 6; ++i)
+				{
+					const int32 NeighborX = X + FaceOffsets[i][0];
+					const int32 NeighborY = Y + FaceOffsets[i][1];
+					const int32 NeighborZ = Z + FaceOffsets[i][2];
+					const int32 NeighborIndex = NeighborX + NeighborY * GridSize.X + NeighborZ * GridSize.X * GridSize.Y;
+					
+					if (NeighborIndex >= 0 && NeighborIndex < DensityGrid.Num())
+					{
+						WeightedSum += DensityGrid[NeighborIndex] * FaceWeight;
+						TotalWeight += FaceWeight;
+					}
+				}
+				
+				// Edge neighbors (lower weight)
+				const float EdgeWeight = 1.0f;
+				const int32 EdgeOffsets[12][3] = {
+					// Edges along X axis
+					{-1, -1, 0}, {-1, 1, 0}, {1, -1, 0}, {1, 1, 0},
+					// Edges along Y axis
+					{-1, 0, -1}, {-1, 0, 1}, {1, 0, -1}, {1, 0, 1},
+					// Edges along Z axis
+					{0, -1, -1}, {0, -1, 1}, {0, 1, -1}, {0, 1, 1}
+				};
+				
+				for (int32 i = 0; i < 12; ++i)
+				{
+					const int32 NeighborX = X + EdgeOffsets[i][0];
+					const int32 NeighborY = Y + EdgeOffsets[i][1];
+					const int32 NeighborZ = Z + EdgeOffsets[i][2];
+					
+					if (NeighborX >= 0 && NeighborX < GridSize.X &&
+						NeighborY >= 0 && NeighborY < GridSize.Y &&
+						NeighborZ >= 0 && NeighborZ < GridSize.Z)
+					{
+						const int32 NeighborIndex = NeighborX + NeighborY * GridSize.X + NeighborZ * GridSize.X * GridSize.Y;
+						WeightedSum += DensityGrid[NeighborIndex] * EdgeWeight;
+						TotalWeight += EdgeWeight;
+					}
+				}
+				
+				// Calculate smoothed value
+				const float SmoothedValue = WeightedSum / TotalWeight;
+				
+				// Lerp between original and smoothed value based on strength
+				SmoothedGrid[CenterIndex] = FMath::Lerp(CenterValue, SmoothedValue, Strength);
+			}
+		}
+	}
+	
+	DensityGrid = SmoothedGrid;
+}
+
+float UFluidVisualizationComponent::GetSmoothedDensity(const TArray<float>& DensityGrid, const FIntVector& GridSize, int32 X, int32 Y, int32 Z) const
+{
+	// Bounds checking
+	if (X < 0 || X >= GridSize.X || Y < 0 || Y >= GridSize.Y || Z < 0 || Z >= GridSize.Z)
+		return 0.0f;
+		
+	const int32 Index = X + Y * GridSize.X + Z * GridSize.X * GridSize.Y;
+	if (Index < 0 || Index >= DensityGrid.Num())
+		return 0.0f;
+		
+	return DensityGrid[Index];
 }
