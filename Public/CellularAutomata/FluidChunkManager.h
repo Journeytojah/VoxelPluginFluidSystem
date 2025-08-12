@@ -158,6 +158,9 @@ public:
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bShowChunkStates = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
+	bool bDebugCrossChunkFlow = false;
 
 protected:
 	UPROPERTY()

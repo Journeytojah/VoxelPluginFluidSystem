@@ -104,6 +104,7 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 	
 	TArray<UFluidChunk*> ActiveChunkArray = GetActiveChunks();
 	
+	// First, update individual chunk simulations
 	if (StreamingConfig.bUseAsyncLoading && ActiveChunkArray.Num() > 4)
 	{
 		ParallelFor(ActiveChunkArray.Num(), [&](int32 Index)
@@ -125,7 +126,18 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 		}
 	}
 	
+	// Then synchronize borders between chunks
 	SynchronizeChunkBorders();
+	
+	// Finally, apply the NextCells to Cells for all chunks after border sync
+	for (UFluidChunk* Chunk : ActiveChunkArray)
+	{
+		if (Chunk)
+		{
+			// Swap the cell buffers to apply border changes
+			Chunk->Cells = Chunk->NextCells;
+		}
+	}
 }
 
 UFluidChunk* UFluidChunkManager::GetChunk(const FFluidChunkCoord& Coord)
@@ -530,12 +542,16 @@ void UFluidChunkManager::SynchronizeChunkBorders()
 {
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_BorderSync);
 	
+	// Create a set to track processed chunk pairs to avoid duplicate processing
+	TSet<FString> ProcessedPairs;
+	
 	for (const FFluidChunkCoord& Coord : ActiveChunkCoords)
 	{
 		UFluidChunk* Chunk = GetChunk(Coord);
-		if (!Chunk || !Chunk->bBorderDirty)
+		if (!Chunk)
 			continue;
 		
+		// Process each neighbor direction
 		const TArray<FFluidChunkCoord> NeighborCoords = {
 			FFluidChunkCoord(Coord.X + 1, Coord.Y, Coord.Z),
 			FFluidChunkCoord(Coord.X - 1, Coord.Y, Coord.Z),
@@ -547,18 +563,37 @@ void UFluidChunkManager::SynchronizeChunkBorders()
 		
 		for (const FFluidChunkCoord& NeighborCoord : NeighborCoords)
 		{
+			// Create a unique key for this chunk pair
+			FString PairKey = FString::Printf(TEXT("%d_%d_%d-%d_%d_%d"),
+				FMath::Min(Coord.X, NeighborCoord.X),
+				FMath::Min(Coord.Y, NeighborCoord.Y),
+				FMath::Min(Coord.Z, NeighborCoord.Z),
+				FMath::Max(Coord.X, NeighborCoord.X),
+				FMath::Max(Coord.Y, NeighborCoord.Y),
+				FMath::Max(Coord.Z, NeighborCoord.Z));
+			
+			// Skip if we've already processed this pair
+			if (ProcessedPairs.Contains(PairKey))
+				continue;
+			
 			UFluidChunk* Neighbor = GetChunk(NeighborCoord);
 			if (Neighbor && Neighbor->State == EChunkState::Active)
 			{
+				// Process bidirectional flow between chunks
 				ProcessCrossChunkFlow(Chunk, Neighbor, 0.016f);
+				ProcessCrossChunkFlow(Neighbor, Chunk, 0.016f);
+				ProcessedPairs.Add(PairKey);
 			}
 		}
+		
+		// Clear the border dirty flag after processing
+		Chunk->bBorderDirty = false;
 	}
 }
 
 void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk* ChunkB, float DeltaTime)
 {
-	if (!ChunkA || !ChunkB)
+	if (!ChunkA || !ChunkB || ChunkA->State != EChunkState::Active || ChunkB->State != EChunkState::Active)
 		return;
 	
 	const FFluidChunkCoord& CoordA = ChunkA->ChunkCoord;
@@ -568,41 +603,242 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 	const int32 DiffY = CoordB.Y - CoordA.Y;
 	const int32 DiffZ = CoordB.Z - CoordA.Z;
 	
+	// Only process direct neighbors
 	if (FMath::Abs(DiffX) + FMath::Abs(DiffY) + FMath::Abs(DiffZ) != 1)
 		return;
 	
-	const FChunkBorderData BorderA = ChunkA->ExtractBorderData();
-	const FChunkBorderData BorderB = ChunkB->ExtractBorderData();
+	const int32 LocalChunkSize = ChunkA->ChunkSize;
+	const float LocalFlowRate = ChunkA->FlowRate;
+	const float FlowAmount = LocalFlowRate * DeltaTime;
 	
-	if (DiffX == 1)
+	// Process flow between chunks based on their relative positions
+	if (DiffX == 1) // ChunkB is to the positive X of ChunkA
 	{
-		ChunkA->ApplyBorderData(BorderB);
-		ChunkB->ApplyBorderData(BorderA);
+		// Process flow from ChunkA's positive X border to ChunkB's negative X border
+		for (int32 y = 0; y < LocalChunkSize; ++y)
+		{
+			for (int32 z = 0; z < LocalChunkSize; ++z)
+			{
+				// Get cells at the border
+				const int32 IdxA = ChunkA->GetLocalCellIndex(LocalChunkSize - 1, y, z);
+				const int32 IdxB = ChunkB->GetLocalCellIndex(0, y, z);
+				
+				if (IdxA != -1 && IdxB != -1)
+				{
+					FCAFluidCell& CellA = ChunkA->Cells[IdxA];
+					FCAFluidCell& CellB = ChunkB->Cells[IdxB];
+					
+					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
+					{
+						// Calculate flow based on fluid height difference
+						const float HeightA = CellA.TerrainHeight + CellA.FluidLevel;
+						const float HeightB = CellB.TerrainHeight + CellB.FluidLevel;
+						const float HeightDiff = HeightA - HeightB;
+						
+						if (HeightDiff > 0.01f)
+						{
+							const float SpaceInB = ChunkA->MaxFluidLevel - CellB.FluidLevel;
+							const float PossibleFlow = FMath::Min(CellA.FluidLevel * FlowAmount, HeightDiff * 0.5f);
+							const float ActualFlow = FMath::Min(PossibleFlow, SpaceInB);
+							
+							if (ActualFlow > 0.0f)
+							{
+								ChunkA->NextCells[IdxA].FluidLevel -= ActualFlow;
+								ChunkB->NextCells[IdxB].FluidLevel += ActualFlow;
+								ChunkA->bDirty = true;
+								ChunkB->bDirty = true;
+							}
+						}
+					}
+				}
+			}
+		}
 	}
-	else if (DiffX == -1)
+	else if (DiffX == -1) // ChunkB is to the negative X of ChunkA
 	{
-		ChunkA->ApplyBorderData(BorderB);
-		ChunkB->ApplyBorderData(BorderA);
+		// Process flow from ChunkA's negative X border to ChunkB's positive X border
+		for (int32 y = 0; y < LocalChunkSize; ++y)
+		{
+			for (int32 z = 0; z < LocalChunkSize; ++z)
+			{
+				const int32 IdxA = ChunkA->GetLocalCellIndex(0, y, z);
+				const int32 IdxB = ChunkB->GetLocalCellIndex(LocalChunkSize - 1, y, z);
+				
+				if (IdxA != -1 && IdxB != -1)
+				{
+					FCAFluidCell& CellA = ChunkA->Cells[IdxA];
+					FCAFluidCell& CellB = ChunkB->Cells[IdxB];
+					
+					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
+					{
+						const float HeightA = CellA.TerrainHeight + CellA.FluidLevel;
+						const float HeightB = CellB.TerrainHeight + CellB.FluidLevel;
+						const float HeightDiff = HeightA - HeightB;
+						
+						if (HeightDiff > 0.01f)
+						{
+							const float SpaceInB = ChunkA->MaxFluidLevel - CellB.FluidLevel;
+							const float PossibleFlow = FMath::Min(CellA.FluidLevel * FlowAmount, HeightDiff * 0.5f);
+							const float ActualFlow = FMath::Min(PossibleFlow, SpaceInB);
+							
+							if (ActualFlow > 0.0f)
+							{
+								ChunkA->NextCells[IdxA].FluidLevel -= ActualFlow;
+								ChunkB->NextCells[IdxB].FluidLevel += ActualFlow;
+								ChunkA->bDirty = true;
+								ChunkB->bDirty = true;
+							}
+						}
+					}
+				}
+			}
+		}
 	}
-	else if (DiffY == 1)
+	else if (DiffY == 1) // ChunkB is to the positive Y of ChunkA
 	{
-		ChunkA->ApplyBorderData(BorderB);
-		ChunkB->ApplyBorderData(BorderA);
+		// Process flow from ChunkA's positive Y border to ChunkB's negative Y border
+		for (int32 x = 0; x < LocalChunkSize; ++x)
+		{
+			for (int32 z = 0; z < LocalChunkSize; ++z)
+			{
+				const int32 IdxA = ChunkA->GetLocalCellIndex(x, LocalChunkSize - 1, z);
+				const int32 IdxB = ChunkB->GetLocalCellIndex(x, 0, z);
+				
+				if (IdxA != -1 && IdxB != -1)
+				{
+					FCAFluidCell& CellA = ChunkA->Cells[IdxA];
+					FCAFluidCell& CellB = ChunkB->Cells[IdxB];
+					
+					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
+					{
+						const float HeightA = CellA.TerrainHeight + CellA.FluidLevel;
+						const float HeightB = CellB.TerrainHeight + CellB.FluidLevel;
+						const float HeightDiff = HeightA - HeightB;
+						
+						if (HeightDiff > 0.01f)
+						{
+							const float SpaceInB = ChunkA->MaxFluidLevel - CellB.FluidLevel;
+							const float PossibleFlow = FMath::Min(CellA.FluidLevel * FlowAmount, HeightDiff * 0.5f);
+							const float ActualFlow = FMath::Min(PossibleFlow, SpaceInB);
+							
+							if (ActualFlow > 0.0f)
+							{
+								ChunkA->NextCells[IdxA].FluidLevel -= ActualFlow;
+								ChunkB->NextCells[IdxB].FluidLevel += ActualFlow;
+								ChunkA->bDirty = true;
+								ChunkB->bDirty = true;
+							}
+						}
+					}
+				}
+			}
+		}
 	}
-	else if (DiffY == -1)
+	else if (DiffY == -1) // ChunkB is to the negative Y of ChunkA
 	{
-		ChunkA->ApplyBorderData(BorderB);
-		ChunkB->ApplyBorderData(BorderA);
+		// Process flow from ChunkA's negative Y border to ChunkB's positive Y border
+		for (int32 x = 0; x < LocalChunkSize; ++x)
+		{
+			for (int32 z = 0; z < LocalChunkSize; ++z)
+			{
+				const int32 IdxA = ChunkA->GetLocalCellIndex(x, 0, z);
+				const int32 IdxB = ChunkB->GetLocalCellIndex(x, LocalChunkSize - 1, z);
+				
+				if (IdxA != -1 && IdxB != -1)
+				{
+					FCAFluidCell& CellA = ChunkA->Cells[IdxA];
+					FCAFluidCell& CellB = ChunkB->Cells[IdxB];
+					
+					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
+					{
+						const float HeightA = CellA.TerrainHeight + CellA.FluidLevel;
+						const float HeightB = CellB.TerrainHeight + CellB.FluidLevel;
+						const float HeightDiff = HeightA - HeightB;
+						
+						if (HeightDiff > 0.01f)
+						{
+							const float SpaceInB = ChunkA->MaxFluidLevel - CellB.FluidLevel;
+							const float PossibleFlow = FMath::Min(CellA.FluidLevel * FlowAmount, HeightDiff * 0.5f);
+							const float ActualFlow = FMath::Min(PossibleFlow, SpaceInB);
+							
+							if (ActualFlow > 0.0f)
+							{
+								ChunkA->NextCells[IdxA].FluidLevel -= ActualFlow;
+								ChunkB->NextCells[IdxB].FluidLevel += ActualFlow;
+								ChunkA->bDirty = true;
+								ChunkB->bDirty = true;
+							}
+						}
+					}
+				}
+			}
+		}
 	}
-	else if (DiffZ == 1)
+	else if (DiffZ == 1) // ChunkB is above ChunkA
 	{
-		ChunkA->ApplyBorderData(BorderB);
-		ChunkB->ApplyBorderData(BorderA);
+		// Process flow from ChunkA's top to ChunkB's bottom (usually no upward flow unless pressure)
+		for (int32 x = 0; x < LocalChunkSize; ++x)
+		{
+			for (int32 y = 0; y < LocalChunkSize; ++y)
+			{
+				const int32 IdxA = ChunkA->GetLocalCellIndex(x, y, LocalChunkSize - 1);
+				const int32 IdxB = ChunkB->GetLocalCellIndex(x, y, 0);
+				
+				if (IdxA != -1 && IdxB != -1)
+				{
+					FCAFluidCell& CellA = ChunkA->Cells[IdxA];
+					FCAFluidCell& CellB = ChunkB->Cells[IdxB];
+					
+					// Only allow upward flow if there's significant pressure
+					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel >= ChunkA->MaxFluidLevel * 0.95f)
+					{
+						const float SpaceInB = ChunkA->MaxFluidLevel - CellB.FluidLevel;
+						const float PossibleFlow = FMath::Min(CellA.FluidLevel * FlowAmount * 0.1f, SpaceInB);
+						
+						if (PossibleFlow > 0.0f)
+						{
+							ChunkA->NextCells[IdxA].FluidLevel -= PossibleFlow;
+							ChunkB->NextCells[IdxB].FluidLevel += PossibleFlow;
+							ChunkA->bDirty = true;
+							ChunkB->bDirty = true;
+						}
+					}
+				}
+			}
+		}
 	}
-	else if (DiffZ == -1)
+	else if (DiffZ == -1) // ChunkB is below ChunkA
 	{
-		ChunkA->ApplyBorderData(BorderB);
-		ChunkB->ApplyBorderData(BorderA);
+		// Process gravity flow from ChunkA's bottom to ChunkB's top
+		for (int32 x = 0; x < LocalChunkSize; ++x)
+		{
+			for (int32 y = 0; y < LocalChunkSize; ++y)
+			{
+				const int32 IdxA = ChunkA->GetLocalCellIndex(x, y, 0);
+				const int32 IdxB = ChunkB->GetLocalCellIndex(x, y, LocalChunkSize - 1);
+				
+				if (IdxA != -1 && IdxB != -1)
+				{
+					FCAFluidCell& CellA = ChunkA->Cells[IdxA];
+					FCAFluidCell& CellB = ChunkB->Cells[IdxB];
+					
+					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
+					{
+						const float SpaceInB = ChunkA->MaxFluidLevel - CellB.FluidLevel;
+						const float GravityFlow = (ChunkA->Gravity / 1000.0f) * DeltaTime;
+						const float PossibleFlow = FMath::Min(CellA.FluidLevel * GravityFlow, SpaceInB);
+						
+						if (PossibleFlow > 0.0f)
+						{
+							ChunkA->NextCells[IdxA].FluidLevel -= PossibleFlow;
+							ChunkB->NextCells[IdxB].FluidLevel += PossibleFlow;
+							ChunkA->bDirty = true;
+							ChunkB->bDirty = true;
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -671,6 +907,31 @@ void UFluidChunkManager::ActivateChunk(UFluidChunk* Chunk)
 		ActiveChunkCoords.Add(Coord);
 		InactiveChunkCoords.Remove(Coord);
 		BorderOnlyChunkCoords.Remove(Coord);
+		
+		// Ensure neighboring chunks are at least loaded for border synchronization
+		const TArray<FFluidChunkCoord> NeighborCoords = {
+			FFluidChunkCoord(Coord.X + 1, Coord.Y, Coord.Z),
+			FFluidChunkCoord(Coord.X - 1, Coord.Y, Coord.Z),
+			FFluidChunkCoord(Coord.X, Coord.Y + 1, Coord.Z),
+			FFluidChunkCoord(Coord.X, Coord.Y - 1, Coord.Z),
+			FFluidChunkCoord(Coord.X, Coord.Y, Coord.Z + 1),
+			FFluidChunkCoord(Coord.X, Coord.Y, Coord.Z - 1)
+		};
+		
+		for (const FFluidChunkCoord& NeighborCoord : NeighborCoords)
+		{
+			UFluidChunk* NeighborChunk = GetChunk(NeighborCoord);
+			if (!NeighborChunk)
+			{
+				// Create and load the neighbor chunk if it doesn't exist
+				NeighborChunk = GetOrCreateChunk(NeighborCoord);
+				if (NeighborChunk && NeighborChunk->State == EChunkState::Unloaded)
+				{
+					NeighborChunk->LoadChunk();
+					InactiveChunkCoords.Add(NeighborCoord);
+				}
+			}
+		}
 		
 		// Notify that the chunk has been activated (for terrain refresh)
 		OnChunkLoadedDelegate.Broadcast(Coord);

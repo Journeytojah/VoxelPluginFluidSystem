@@ -112,6 +112,8 @@ public:
 	void SetLODLevel(int32 NewLODLevel);
 	
 	void ClearChunk();
+	
+	int32 GetLocalCellIndex(int32 X, int32 Y, int32 Z) const;
 
 public:
 	UPROPERTY(BlueprintReadOnly)
@@ -169,7 +171,6 @@ public:
 
 protected:
 	bool IsValidLocalCell(int32 X, int32 Y, int32 Z) const;
-	int32 GetLocalCellIndex(int32 X, int32 Y, int32 Z) const;
 	
 	void ApplyGravity(float DeltaTime);
 	void ApplyFlowRules(float DeltaTime);

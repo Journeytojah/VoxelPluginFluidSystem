@@ -72,7 +72,8 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	
 	ProcessBorderFlow(DeltaTime);
 	
-	Cells = NextCells;
+	// Don't swap buffers here - the ChunkManager will do it after border synchronization
+	// Cells = NextCells;
 	LastUpdateTime += DeltaTime;
 	
 	bDirty = true;
