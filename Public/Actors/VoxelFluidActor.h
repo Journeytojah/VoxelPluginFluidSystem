@@ -169,6 +169,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties")
 	bool bAllowFluidEscape = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float FluidAccumulation = 0.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.001", ClampMax = "0.1"))
+	float MinFluidThreshold = 0.001f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.1", ClampMax = "5.0"))
+	float FluidEvaporationRate = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.0", ClampMax = "2.0"))
+	float FluidDensityMultiplier = 1.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bShowDebugGrid = false;
 

@@ -98,6 +98,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
 	bool bFlipNormals = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "0.1", ClampMax = "5.0"))
+	float MeshInterpolationSpeed = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
+	bool bSmoothMeshUpdates = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "0.001", ClampMax = "0.1"))
+	float MeshUpdateThreshold = 0.01f;
+
 private:
 	UPROPERTY()
 	UCAFluidGrid* FluidGrid;
@@ -114,12 +123,21 @@ private:
 	float MeshUpdateTimer = 0.0f;
 	bool bUseChunkedSystem = false;
 
+	// Smooth interpolation state
+	TArray<float> PreviousDensityGrid;
+	TArray<float> CurrentDensityGrid;
+	TArray<float> InterpolatedDensityGrid;
+	float InterpolationAlpha = 0.0f;
+
 	void DrawDebugFluid();
 	void DrawChunkedDebugFluid();
 	void UpdateInstancedMeshes();
 	void UpdateChunkedInstancedMeshes();
 	void GenerateMarchingCubesVisualization();
 	void GenerateChunkedMarchingCubes();
+	void UpdateDensityInterpolation(float DeltaTime);
+	void InterpolateDensityGrids();
+	bool ShouldUpdateMesh(const TArray<float>& NewDensityGrid) const;
 	void RenderFluidChunk(UFluidChunk* Chunk, const FVector& ViewerPosition);
 	bool ShouldRenderChunk(UFluidChunk* Chunk, const FVector& ViewerPosition) const;
 	FVector GetPrimaryViewerPosition() const;

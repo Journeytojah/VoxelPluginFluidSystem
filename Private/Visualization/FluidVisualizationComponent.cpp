@@ -58,6 +58,12 @@ void UFluidVisualizationComponent::TickComponent(float DeltaTime, ELevelTick Tic
 	if (!FluidGrid)
 		return;
 	
+	// Handle smooth interpolation for marching cubes
+	if (RenderMode == EFluidRenderMode::MarchingCubes && bSmoothMeshUpdates)
+	{
+		UpdateDensityInterpolation(DeltaTime);
+	}
+	
 	MeshUpdateTimer += DeltaTime;
 	if (MeshUpdateTimer >= MeshUpdateInterval)
 	{
@@ -554,12 +560,12 @@ void UFluidVisualizationComponent::GenerateMarchingCubesVisualization()
 		return;
 
 	// Create density grid from fluid grid
-	TArray<float> DensityGrid;
+	TArray<float> NewDensityGrid;
 	const int32 GridSizeX = FluidGrid->GridSizeX;
 	const int32 GridSizeY = FluidGrid->GridSizeY;
 	const int32 GridSizeZ = FluidGrid->GridSizeZ;
 	
-	DensityGrid.Reserve(GridSizeX * GridSizeY * GridSizeZ);
+	NewDensityGrid.Reserve(GridSizeX * GridSizeY * GridSizeZ);
 	
 	// Convert fluid levels to density values
 	for (int32 Z = 0; Z < GridSizeZ; ++Z)
@@ -569,9 +575,41 @@ void UFluidVisualizationComponent::GenerateMarchingCubesVisualization()
 			for (int32 X = 0; X < GridSizeX; ++X)
 			{
 				const float FluidLevel = FluidGrid->GetFluidAt(X, Y, Z);
-				DensityGrid.Add(FluidLevel);
+				NewDensityGrid.Add(FluidLevel);
 			}
 		}
+	}
+	
+	// Use smooth interpolation if enabled
+	TArray<float> DensityGrid;
+	if (bSmoothMeshUpdates)
+	{
+		// Check if we need to update the mesh based on threshold
+		if (!ShouldUpdateMesh(NewDensityGrid))
+		{
+			// Use interpolated values
+			DensityGrid = InterpolatedDensityGrid;
+		}
+		else
+		{
+			// Store new target and reset interpolation
+			PreviousDensityGrid = CurrentDensityGrid;
+			CurrentDensityGrid = NewDensityGrid;
+			InterpolationAlpha = 0.0f;
+			
+			// Initialize interpolated grid
+			if (InterpolatedDensityGrid.Num() != NewDensityGrid.Num())
+			{
+				InterpolatedDensityGrid = PreviousDensityGrid;
+			}
+			
+			DensityGrid = InterpolatedDensityGrid;
+		}
+	}
+	else
+	{
+		// Direct update without interpolation
+		DensityGrid = NewDensityGrid;
 	}
 	
 	// Generate marching cubes mesh
@@ -709,4 +747,45 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 			ChunkMesh->ClearAllMeshSections();
 		}
 	}
+}
+
+void UFluidVisualizationComponent::UpdateDensityInterpolation(float DeltaTime)
+{
+	if (InterpolationAlpha >= 1.0f || CurrentDensityGrid.Num() == 0 || PreviousDensityGrid.Num() == 0)
+		return;
+	
+	// Update interpolation alpha
+	InterpolationAlpha = FMath::Min(1.0f, InterpolationAlpha + DeltaTime * MeshInterpolationSpeed);
+	
+	// Interpolate density values
+	InterpolateDensityGrids();
+}
+
+void UFluidVisualizationComponent::InterpolateDensityGrids()
+{
+	if (CurrentDensityGrid.Num() != PreviousDensityGrid.Num())
+		return;
+		
+	InterpolatedDensityGrid.SetNum(CurrentDensityGrid.Num());
+	
+	for (int32 i = 0; i < CurrentDensityGrid.Num(); ++i)
+	{
+		InterpolatedDensityGrid[i] = FMath::Lerp(PreviousDensityGrid[i], CurrentDensityGrid[i], InterpolationAlpha);
+	}
+}
+
+bool UFluidVisualizationComponent::ShouldUpdateMesh(const TArray<float>& NewDensityGrid) const
+{
+	if (CurrentDensityGrid.Num() != NewDensityGrid.Num())
+		return true;
+		
+	// Check if changes are significant enough to warrant an update
+	float MaxDifference = 0.0f;
+	for (int32 i = 0; i < NewDensityGrid.Num(); ++i)
+	{
+		const float Difference = FMath::Abs(NewDensityGrid[i] - CurrentDensityGrid[i]);
+		MaxDifference = FMath::Max(MaxDifference, Difference);
+	}
+	
+	return MaxDifference > MeshUpdateThreshold;
 }

@@ -49,6 +49,12 @@ AVoxelFluidActor::AVoxelFluidActor()
 	bShowDebugGrid = false;
 	bShowFlowVectors = false;
 	DebugFluidSpawnAmount = 1.0f;
+	
+	// Initialize new fluid properties
+	FluidAccumulation = 0.1f;
+	MinFluidThreshold = 0.001f;
+	FluidEvaporationRate = 0.0f;
+	FluidDensityMultiplier = 1.0f;
 }
 
 void AVoxelFluidActor::BeginPlay()
@@ -282,18 +288,20 @@ void AVoxelFluidActor::AddFluidSource(const FVector& WorldPosition, float FlowRa
 {
 	// Use DefaultSourceFlowRate if no flow rate is specified
 	const float ActualFlowRate = (FlowRate < 0.0f) ? DefaultSourceFlowRate : FlowRate;
+	// Apply density multiplier to the flow rate
+	const float FinalFlowRate = ActualFlowRate * FluidDensityMultiplier;
 	
 	if (FluidSources.Contains(WorldPosition))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Fluid source already exists at %s, updating flow rate from %f to %f"), 
-			   *WorldPosition.ToString(), FluidSources[WorldPosition], ActualFlowRate);
-		FluidSources[WorldPosition] = ActualFlowRate;
+			   *WorldPosition.ToString(), FluidSources[WorldPosition], FinalFlowRate);
+		FluidSources[WorldPosition] = FinalFlowRate;
 	}
 	else
 	{
-		FluidSources.Add(WorldPosition, ActualFlowRate);
+		FluidSources.Add(WorldPosition, FinalFlowRate);
 		UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Added new fluid source at %s with flow rate %f"), 
-			   *WorldPosition.ToString(), ActualFlowRate);
+			   *WorldPosition.ToString(), FinalFlowRate);
 	}
 }
 
@@ -306,13 +314,16 @@ void AVoxelFluidActor::RemoveFluidSource(const FVector& WorldPosition)
 
 void AVoxelFluidActor::AddFluidAtLocation(const FVector& WorldPosition, float Amount)
 {
+	// Apply accumulation and density multiplier
+	const float AdjustedAmount = Amount * FluidDensityMultiplier * (1.0f + FluidAccumulation);
+	
 	if (bUseChunkedSystem && ChunkManager)
 	{
-		ChunkManager->AddFluidAtWorldPosition(WorldPosition, Amount);
+		ChunkManager->AddFluidAtWorldPosition(WorldPosition, AdjustedAmount);
 	}
 	else if (VoxelIntegration)
 	{
-		VoxelIntegration->AddFluidAtWorldPosition(WorldPosition, Amount);
+		VoxelIntegration->AddFluidAtWorldPosition(WorldPosition, AdjustedAmount);
 	}
 	else if (!bUseChunkedSystem && FluidGrid)
 	{
@@ -320,7 +331,7 @@ void AVoxelFluidActor::AddFluidAtLocation(const FVector& WorldPosition, float Am
 		int32 CellX, CellY, CellZ;
 		if (FluidGrid->GetCellFromWorldPosition(WorldPosition, CellX, CellY, CellZ))
 		{
-			FluidGrid->AddFluid(CellX, CellY, CellZ, Amount);
+			FluidGrid->AddFluid(CellX, CellY, CellZ, AdjustedAmount);
 		}
 	}
 }
