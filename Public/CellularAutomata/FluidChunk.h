@@ -187,6 +187,9 @@ public:
 	bool HasValidMeshData(int32 DesiredLOD, float DesiredIsoLevel) const;
 	void ClearMeshData();
 	void MarkMeshDataDirty();
+	void ConsiderMeshUpdate(float FluidChange);
+	bool ShouldRegenerateMesh() const;
+	int32 GetSettledCellCount() const;
 	uint32 CalculateFluidStateHash() const;
 
 public:
@@ -227,6 +230,13 @@ public:
 	UPROPERTY()
 	bool bMeshDataDirty = true;
 	
+	// Mesh optimization
+	float LastMeshChangeAmount = 0.0f;
+	float AccumulatedMeshChange = 0.0f;
+	float MeshChangeThreshold = 0.05f; // Only regenerate if > 5% change
+	int32 SettledCellCount = 0;
+	float LastMeshUpdateTime = 0.0f;
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
 	float FlowRate = 0.5f;
 	
@@ -257,6 +267,12 @@ protected:
 	void ApplyFlowRules(float DeltaTime);
 	void ApplyPressure(float DeltaTime);
 	void UpdateVelocities(float DeltaTime);
+	
+	void CalculateHydrostaticPressure();
+	void DetectAndMarkPools(float DeltaTime);
+	void ApplyUpwardPressureFlow(float DeltaTime);
+	void ApplyDiagonalFlow(float DeltaTime);
+	void ApplyPressureEqualization(float DeltaTime);
 	
 	void ProcessBorderFlow(float DeltaTime);
 	

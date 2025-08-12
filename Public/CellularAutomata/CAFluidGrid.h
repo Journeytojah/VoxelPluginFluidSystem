@@ -13,24 +13,32 @@ struct VOXELFLUIDSYSTEM_API FCAFluidCell
 	float FluidLevel = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid")
-	FVector FlowVelocity = FVector::ZeroVector;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid")
 	float TerrainHeight = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid")
 	bool bIsSolid = false;
-
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid")
-	float Pressure = 0.0f;
+	bool bSettled = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid")
+	int32 SettledCounter = 0;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid")
+	float LastFluidLevel = 0.0f;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid")
+	bool bSourceBlock = false;
 
 	FCAFluidCell()
 	{
 		FluidLevel = 0.0f;
-		FlowVelocity = FVector::ZeroVector;
 		TerrainHeight = 0.0f;
 		bIsSolid = false;
-		Pressure = 0.0f;
+		bSettled = false;
+		SettledCounter = 0;
+		LastFluidLevel = 0.0f;
+		bSourceBlock = false;
 	}
 };
 
@@ -68,6 +76,19 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid CA")
 	void ClearGrid();
+	
+	// Debug and stats methods
+	UFUNCTION(BlueprintCallable, Category = "Fluid CA Debug")
+	int32 GetSettledCellCount() const { return TotalSettledCells; }
+	
+	UFUNCTION(BlueprintCallable, Category = "Fluid CA Debug")
+	int32 GetActiveCellCount() const { return ActiveCellCount; }
+	
+	UFUNCTION(BlueprintCallable, Category = "Fluid CA Debug")
+	bool IsCellSettled(int32 X, int32 Y, int32 Z) const;
+	
+	UFUNCTION(BlueprintCallable, Category = "Fluid CA Debug")
+	float GetSettlingPercentage() const;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Settings")
 	float CellSize = 100.0f;
@@ -82,28 +103,39 @@ public:
 	int32 GridSizeZ = 32;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
-	float FlowRate = 0.5f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
-	float Viscosity = 0.1f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
-	float Gravity = 981.0f;
-
+	float MaxFluidLevel = 1.0f;
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
 	float MinFluidLevel = 0.001f;
-
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
-	float MaxFluidLevel = 1.0f;
-
+	float FlowRate = 0.25f;
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
-	float CompressionFactor = 0.05f;
-
+	int32 SettledThreshold = 5;
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
-	bool bAllowFluidEscape = true;
+	float EqualizationRate = 0.5f;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
+	bool bUseMinecraftRules = true;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
+	float CompressionThreshold = 0.95f;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
+	bool bEnableSettling = true;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
+	float SettlingChangeThreshold = 0.0001f;
 
 	TArray<FCAFluidCell> Cells;
 	TArray<FCAFluidCell> NextCells;
+	
+	// Settling optimization
+	TArray<bool> CellNeedsUpdate;
+	int32 ActiveCellCount = 0;
+	int32 TotalSettledCells = 0;
 
 	FVector GridOrigin;
 
@@ -112,11 +144,22 @@ protected:
 	bool IsValidCell(int32 X, int32 Y, int32 Z) const;
 	int32 GetCellIndex(int32 X, int32 Y, int32 Z) const;
 	
-	void ApplyGravity(float DeltaTime);
-	void ApplyFlowRules(float DeltaTime);
-	void ApplyPressure(float DeltaTime);
-	void UpdateVelocities(float DeltaTime);
+	// Simplified CA methods
+	void ProcessGravity(float DeltaTime);
+	void ProcessHorizontalFlow(float DeltaTime);
+	void ProcessEqualization(float DeltaTime);
+	void ProcessCompression(float DeltaTime);
+	void UpdateSettledStates();
 	
-	float CalculateFlowTo(int32 FromX, int32 FromY, int32 FromZ, 
-						  int32 ToX, int32 ToY, int32 ToZ, float DeltaTime);
+	// Settling optimization methods
+	void InitializeUpdateFlags();
+	void MarkCellForUpdate(int32 X, int32 Y, int32 Z);
+	void WakeUpNeighbors(int32 X, int32 Y, int32 Z);
+	bool ShouldUpdateCell(int32 X, int32 Y, int32 Z) const;
+	bool CanCellSettle(int32 X, int32 Y, int32 Z) const;
+	void PropagateWakeUp(int32 X, int32 Y, int32 Z, int32 Distance = 2);
+	
+	float GetStableFluidLevel(int32 X, int32 Y, int32 Z) const;
+	bool CanFlowInto(int32 X, int32 Y, int32 Z) const;
+	void DistributeWater(int32 X, int32 Y, int32 Z, float Amount);
 };

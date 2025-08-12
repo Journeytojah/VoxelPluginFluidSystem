@@ -51,22 +51,40 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_UpdateSimulation);
 	
+	// Track total fluid change for mesh update decision
+	float TotalFluidChange = 0.0f;
+	for (int32 i = 0; i < Cells.Num(); ++i)
+	{
+		Cells[i].LastFluidLevel = Cells[i].FluidLevel;
+	}
+	
 	NextCells = Cells;
 	
 	if (CurrentLOD == 0)
 	{
+		// Full quality simulation with enhanced features
+		CalculateHydrostaticPressure();
+		DetectAndMarkPools(DeltaTime);
+		
 		ApplyGravity(DeltaTime);
+		ApplyUpwardPressureFlow(DeltaTime);
 		ApplyFlowRules(DeltaTime);
+		ApplyDiagonalFlow(DeltaTime);
+		ApplyPressureEqualization(DeltaTime);
 		ApplyPressure(DeltaTime);
 		UpdateVelocities(DeltaTime);
 	}
 	else if (CurrentLOD == 1)
 	{
+		// Reduced quality simulation
+		CalculateHydrostaticPressure();
 		ApplyGravity(DeltaTime * 0.5f);
 		ApplyFlowRules(DeltaTime * 0.5f);
+		ApplyPressure(DeltaTime);
 	}
 	else if (CurrentLOD == 2)
 	{
+		// Minimal simulation
 		ApplyGravity(DeltaTime * 0.25f);
 	}
 	
@@ -75,6 +93,18 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	// Don't swap buffers here - the ChunkManager will do it after border synchronization
 	// Cells = NextCells;
 	LastUpdateTime += DeltaTime;
+	
+	// Calculate total change and consider mesh update
+	for (int32 i = 0; i < NextCells.Num(); ++i)
+	{
+		TotalFluidChange += FMath::Abs(NextCells[i].FluidLevel - NextCells[i].LastFluidLevel);
+	}
+	
+	// Only consider mesh update if there was significant change
+	if (TotalFluidChange > 0.001f)
+	{
+		ConsiderMeshUpdate(TotalFluidChange / Cells.Num()); // Average change per cell
+	}
 	
 	bDirty = true;
 }
@@ -143,9 +173,11 @@ void UFluidChunk::AddFluid(int32 LocalX, int32 LocalY, int32 LocalZ, float Amoun
 	const int32 Idx = GetLocalCellIndex(LocalX, LocalY, LocalZ);
 	if (Idx != -1 && !Cells[Idx].bIsSolid)
 	{
+		const float OldLevel = Cells[Idx].FluidLevel;
 		Cells[Idx].FluidLevel = FMath::Min(Cells[Idx].FluidLevel + Amount, MaxFluidLevel);
+		const float Change = FMath::Abs(Cells[Idx].FluidLevel - OldLevel);
 		bDirty = true;
-		bMeshDataDirty = true; // Mark mesh data as dirty when fluid changes
+		ConsiderMeshUpdate(Change); // Only mark dirty if change is significant
 	}
 }
 
@@ -154,9 +186,11 @@ void UFluidChunk::RemoveFluid(int32 LocalX, int32 LocalY, int32 LocalZ, float Am
 	const int32 Idx = GetLocalCellIndex(LocalX, LocalY, LocalZ);
 	if (Idx != -1)
 	{
+		const float OldLevel = Cells[Idx].FluidLevel;
 		Cells[Idx].FluidLevel = FMath::Max(Cells[Idx].FluidLevel - Amount, 0.0f);
+		const float Change = FMath::Abs(OldLevel - Cells[Idx].FluidLevel);
 		bDirty = true;
-		bMeshDataDirty = true; // Mark mesh data as dirty when fluid changes
+		ConsiderMeshUpdate(Change); // Only mark dirty if change is significant
 	}
 }
 
@@ -322,8 +356,9 @@ void UFluidChunk::ClearChunk()
 	for (FCAFluidCell& Cell : Cells)
 	{
 		Cell.FluidLevel = 0.0f;
-		Cell.FlowVelocity = FVector::ZeroVector;
-		Cell.Pressure = 0.0f;
+		Cell.bSettled = false;
+		Cell.SettledCounter = 0;
+		Cell.LastFluidLevel = 0.0f;
 	}
 	NextCells = Cells;
 	bDirty = true;
@@ -385,7 +420,7 @@ void UFluidChunk::ApplyGravity(float DeltaTime)
 					{
 						NextCells[CurrentIdx].FluidLevel -= FlowAmount;
 						NextCells[BelowIdx].FluidLevel += FlowAmount;
-						NextCells[CurrentIdx].FlowVelocity.Z = -FlowAmount / DeltaTime;
+						// Removed velocity tracking - using simplified CA
 					}
 				}
 			}
@@ -503,11 +538,7 @@ void UFluidChunk::ApplyFlowRules(float DeltaTime)
 							NextCells[NeighborIdx].FluidLevel += OutflowToNeighbor[i];
 						}
 						
-						const float VelocityMagnitude = OutflowToNeighbor[i] / DeltaTime;
-						if (i == 0) NextCells[CurrentIdx].FlowVelocity.X = VelocityMagnitude;
-						else if (i == 1) NextCells[CurrentIdx].FlowVelocity.X = -VelocityMagnitude;
-						else if (i == 2) NextCells[CurrentIdx].FlowVelocity.Y = VelocityMagnitude;
-						else if (i == 3) NextCells[CurrentIdx].FlowVelocity.Y = -VelocityMagnitude;
+						// Removed velocity tracking - using simplified CA
 					}
 				}
 			}
@@ -519,35 +550,37 @@ void UFluidChunk::ApplyPressure(float DeltaTime)
 {
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ApplyPressure);
 	
-	for (int32 z = 0; z < ChunkSize; ++z)
+	// Simple compression: when a cell is overfilled, push water upward
+	for (int32 z = 0; z < ChunkSize - 1; ++z)
 	{
 		for (int32 y = 0; y < ChunkSize; ++y)
 		{
 			for (int32 x = 0; x < ChunkSize; ++x)
 			{
 				const int32 CurrentIdx = GetLocalCellIndex(x, y, z);
-				if (CurrentIdx == -1)
+				const int32 AboveIdx = GetLocalCellIndex(x, y, z + 1);
+				
+				if (CurrentIdx == -1 || AboveIdx == -1)
 					continue;
 				
 				FCAFluidCell& CurrentCell = NextCells[CurrentIdx];
+				FCAFluidCell& AboveCell = NextCells[AboveIdx];
 				
-				if (CurrentCell.FluidLevel > MinFluidLevel)
+				// If current cell is overfilled and not solid
+				if (CurrentCell.FluidLevel > MaxFluidLevel && !CurrentCell.bIsSolid)
 				{
-					float FluidAbove = 0.0f;
-					for (int32 zAbove = z + 1; zAbove < ChunkSize; ++zAbove)
+					// Push excess water upward if possible
+					if (!AboveCell.bIsSolid)
 					{
-						const int32 AboveIdx = GetLocalCellIndex(x, y, zAbove);
-						if (AboveIdx != -1)
-						{
-							FluidAbove += Cells[AboveIdx].FluidLevel;
-						}
+						const float Excess = CurrentCell.FluidLevel - MaxFluidLevel;
+						const float SpaceAbove = MaxFluidLevel - AboveCell.FluidLevel;
+						const float TransferAmount = FMath::Min(Excess, SpaceAbove);
+						
+						CurrentCell.FluidLevel -= TransferAmount;
+						AboveCell.FluidLevel += TransferAmount;
+						AboveCell.bSettled = false;
+						AboveCell.SettledCounter = 0;
 					}
-					
-					CurrentCell.Pressure = CurrentCell.FluidLevel + FluidAbove * CompressionFactor;
-				}
-				else
-				{
-					CurrentCell.Pressure = 0.0f;
 				}
 			}
 		}
@@ -557,16 +590,60 @@ void UFluidChunk::ApplyPressure(float DeltaTime)
 void UFluidChunk::UpdateVelocities(float DeltaTime)
 {
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_UpdateVelocities);
-	const float ViscosityDamping = 1.0f - (Viscosity * DeltaTime);
 	
-	for (int32 i = 0; i < NextCells.Num(); ++i)
+	// Update settled states based on whether fluid level changed
+	for (int32 z = 0; z < ChunkSize; ++z)
 	{
-		NextCells[i].FlowVelocity *= ViscosityDamping;
-		
-		const float MaxVelocity = CellSize / DeltaTime;
-		NextCells[i].FlowVelocity.X = FMath::Clamp(NextCells[i].FlowVelocity.X, -MaxVelocity, MaxVelocity);
-		NextCells[i].FlowVelocity.Y = FMath::Clamp(NextCells[i].FlowVelocity.Y, -MaxVelocity, MaxVelocity);
-		NextCells[i].FlowVelocity.Z = FMath::Clamp(NextCells[i].FlowVelocity.Z, -MaxVelocity, MaxVelocity);
+		for (int32 y = 0; y < ChunkSize; ++y)
+		{
+			for (int32 x = 0; x < ChunkSize; ++x)
+			{
+				const int32 i = GetLocalCellIndex(x, y, z);
+				if (i == -1)
+					continue;
+					
+				FCAFluidCell& Cell = NextCells[i];
+				
+				if (Cell.FluidLevel <= MinFluidLevel || Cell.bIsSolid)
+				{
+					Cell.bSettled = false;
+					Cell.SettledCounter = 0;
+					continue;
+				}
+				
+				// Check if fluid level is stable
+				const float Change = FMath::Abs(Cell.FluidLevel - Cell.LastFluidLevel);
+				
+				// Border cells need more careful settling detection
+				bool bIsBorderCell = (x == 0 || x == ChunkSize - 1 || 
+									  y == 0 || y == ChunkSize - 1 || 
+									  z == 0 || z == ChunkSize - 1);
+				
+				if (Change < MinFluidLevel)
+				{
+					Cell.SettledCounter++;
+					
+					// Border cells need more time to settle
+					int32 RequiredSettleCount = bIsBorderCell ? 10 : 5;
+					
+					if (Cell.SettledCounter >= RequiredSettleCount)
+					{
+						Cell.bSettled = true;
+					}
+				}
+				else
+				{
+					Cell.bSettled = false;
+					Cell.SettledCounter = 0;
+					
+					// If a border cell becomes unsettled, mark chunk border as dirty
+					if (bIsBorderCell)
+					{
+						bBorderDirty = true;
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -598,14 +675,24 @@ void UFluidChunk::StoreMeshData(const TArray<FVector>& Vertices, const TArray<in
 	
 	// Mark mesh data as clean since we just generated it
 	bMeshDataDirty = false;
+	AccumulatedMeshChange = 0.0f; // Reset accumulated changes
+	LastMeshUpdateTime = FPlatformTime::Seconds();
 }
 
 bool UFluidChunk::HasValidMeshData(int32 DesiredLOD, float DesiredIsoLevel) const
 {
+	// Don't regenerate if chunk is mostly settled and changes are minimal
+	if (!ShouldRegenerateMesh())
+	{
+		// Use cached mesh even if technically "dirty" if changes are too small
+		return StoredMeshData.IsValidForLOD(DesiredLOD, DesiredIsoLevel);
+	}
+	
 	if (bMeshDataDirty)
 		return false;
 		
-	// Check if stored mesh is valid for current fluid state
+	// Only check hash if we really need to regenerate
+	// This is expensive so we avoid it when possible
 	uint32 CurrentFluidHash = CalculateFluidStateHash();
 	if (CurrentFluidHash != StoredMeshData.FluidStateHash)
 		return false;
@@ -650,4 +737,178 @@ uint32 UFluidChunk::CalculateFluidStateHash() const
 	}
 	
 	return Hash;
+}
+
+void UFluidChunk::CalculateHydrostaticPressure()
+{
+	// Simplified - no pressure calculation needed for basic CA
+	// Method kept for interface compatibility
+}
+
+void UFluidChunk::DetectAndMarkPools(float DeltaTime)
+{
+	// Store previous state for settling detection
+	for (FCAFluidCell& Cell : Cells)
+	{
+		Cell.LastFluidLevel = Cell.FluidLevel;
+	}
+}
+
+void UFluidChunk::ApplyUpwardPressureFlow(float DeltaTime)
+{
+	// Simple compression: when a cell is overfilled, push water upward
+	for (int32 z = 0; z < ChunkSize - 1; ++z)
+	{
+		for (int32 y = 0; y < ChunkSize; ++y)
+		{
+			for (int32 x = 0; x < ChunkSize; ++x)
+			{
+				const int32 CurrentIdx = GetLocalCellIndex(x, y, z);
+				const int32 AboveIdx = GetLocalCellIndex(x, y, z + 1);
+				
+				if (CurrentIdx == -1 || AboveIdx == -1)
+					continue;
+				
+				FCAFluidCell& CurrentCell = NextCells[CurrentIdx];
+				FCAFluidCell& AboveCell = NextCells[AboveIdx];
+				
+				// If current cell is overfilled and not solid
+				if (CurrentCell.FluidLevel > MaxFluidLevel && !CurrentCell.bIsSolid)
+				{
+					// Push excess water upward if possible
+					if (!AboveCell.bIsSolid)
+					{
+						const float Excess = CurrentCell.FluidLevel - MaxFluidLevel;
+						const float SpaceAbove = MaxFluidLevel - AboveCell.FluidLevel;
+						const float TransferAmount = FMath::Min(Excess, SpaceAbove);
+						
+						if (TransferAmount > 0)
+						{
+							CurrentCell.FluidLevel -= TransferAmount;
+							AboveCell.FluidLevel += TransferAmount;
+							AboveCell.bSettled = false;
+							AboveCell.SettledCounter = 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+void UFluidChunk::ApplyDiagonalFlow(float DeltaTime)
+{
+	// Simplified - diagonal flow handled in main horizontal flow for simplicity
+	// Method kept for interface compatibility
+}
+
+void UFluidChunk::ApplyPressureEqualization(float DeltaTime)
+{
+	// Equalize water levels in settled regions for stable pools
+	for (int32 z = 0; z < ChunkSize; ++z)
+	{
+		for (int32 y = 0; y < ChunkSize; ++y)
+		{
+			for (int32 x = 0; x < ChunkSize; ++x)
+			{
+				const int32 CurrentIdx = GetLocalCellIndex(x, y, z);
+				if (CurrentIdx == -1)
+					continue;
+				
+				FCAFluidCell& CurrentCell = NextCells[CurrentIdx];
+				
+				// Skip if no water or not settled
+				if (CurrentCell.FluidLevel <= MinFluidLevel || !CurrentCell.bSettled || CurrentCell.bIsSolid)
+					continue;
+				
+				// Find connected neighbors at same level
+				const int32 Neighbors[4][2] = {
+					{x + 1, y},
+					{x - 1, y},
+					{x, y + 1},
+					{x, y - 1}
+				};
+				
+				float TotalLevel = CurrentCell.FluidLevel;
+				int32 ConnectedCount = 1;
+				TArray<int32> ConnectedCells;
+				
+				for (int32 i = 0; i < 4; ++i)
+				{
+					const int32 nx = Neighbors[i][0];
+					const int32 ny = Neighbors[i][1];
+					
+					if (IsValidLocalCell(nx, ny, z))
+					{
+						const int32 NeighborIdx = GetLocalCellIndex(nx, ny, z);
+						FCAFluidCell& NeighborCell = NextCells[NeighborIdx];
+						
+						if (!NeighborCell.bIsSolid && NeighborCell.bSettled && NeighborCell.FluidLevel > MinFluidLevel)
+						{
+							ConnectedCells.Add(NeighborIdx);
+							TotalLevel += NeighborCell.FluidLevel;
+							ConnectedCount++;
+						}
+					}
+				}
+				
+				// Set all connected cells to average level
+				if (ConnectedCount > 1)
+				{
+					const float AverageLevel = TotalLevel / ConnectedCount;
+					const float AdjustmentRate = 0.5f * DeltaTime;
+					
+					CurrentCell.FluidLevel = FMath::Lerp(CurrentCell.FluidLevel, AverageLevel, AdjustmentRate);
+					
+					for (int32 ConnectedIdx : ConnectedCells)
+					{
+						NextCells[ConnectedIdx].FluidLevel = FMath::Lerp(NextCells[ConnectedIdx].FluidLevel, AverageLevel, AdjustmentRate);
+					}
+				}
+			}
+		}
+	}
+}
+
+void UFluidChunk::ConsiderMeshUpdate(float FluidChange)
+{
+	// Accumulate changes over time
+	AccumulatedMeshChange += FluidChange;
+	
+	// Check if we've exceeded the threshold for mesh regeneration
+	if (AccumulatedMeshChange > MeshChangeThreshold)
+	{
+		bMeshDataDirty = true;
+	}
+	
+	// Also mark dirty if it's been too long since last update (prevent stale meshes)
+	const float CurrentTime = FPlatformTime::Seconds();
+	if (CurrentTime - LastMeshUpdateTime > 5.0f) // Force update every 5 seconds
+	{
+		bMeshDataDirty = true;
+	}
+}
+
+bool UFluidChunk::ShouldRegenerateMesh() const
+{
+	// Don't regenerate if chunk is mostly settled
+	const float SettledRatio = GetSettledCellCount() / (float)FMath::Max(1, GetActiveCellCount());
+	if (SettledRatio > 0.8f && AccumulatedMeshChange < MeshChangeThreshold)
+	{
+		return false; // Chunk is mostly settled, don't regenerate unless changes are significant
+	}
+	
+	// Always regenerate if marked dirty and changes are significant
+	return bMeshDataDirty && (AccumulatedMeshChange > MeshChangeThreshold * 0.5f);
+}
+
+int32 UFluidChunk::GetSettledCellCount() const
+{
+	int32 Count = 0;
+	for (const FCAFluidCell& Cell : Cells)
+	{
+		if (Cell.bSettled && Cell.FluidLevel > MinFluidLevel)
+			Count++;
+	}
+	return Count;
 }

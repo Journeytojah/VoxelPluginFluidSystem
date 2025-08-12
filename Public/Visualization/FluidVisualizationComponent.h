@@ -164,4 +164,11 @@ private:
 	
 	TMap<UFluidChunk*, UInstancedStaticMeshComponent*> ChunkMeshComponents;
 	TMap<UFluidChunk*, UProceduralMeshComponent*> ChunkMarchingCubesMeshes;
+	
+	// Optimization: Track chunks that need mesh updates
+	TSet<UFluidChunk*> ChunksNeedingMeshUpdate;
+	TMap<UFluidChunk*, float> ChunkLastMeshUpdateTime;
+	float ChunkMeshCheckInterval = 0.1f; // Check chunks less frequently
+	float ChunkMeshCheckTimer = 0.0f;
+	int32 MaxChunksToUpdatePerFrame = 3; // Limit mesh updates per frame
 };

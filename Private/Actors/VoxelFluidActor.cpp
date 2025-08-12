@@ -178,9 +178,10 @@ void AVoxelFluidActor::InitializeFluidSystem()
 		{
 			FluidGrid->InitializeGrid(GridSizeX, GridSizeY, GridSizeZ, CellSize, CalculatedGridOrigin);
 			FluidGrid->FlowRate = FluidFlowRate;
-			FluidGrid->Viscosity = FluidViscosity;
-			FluidGrid->Gravity = GravityStrength;
-			FluidGrid->bAllowFluidEscape = bAllowFluidEscape;
+			// Removed parameters from simplified CA:
+			// FluidGrid->Viscosity = FluidViscosity;
+			// FluidGrid->Gravity = GravityStrength;
+			// FluidGrid->bAllowFluidEscape = bAllowFluidEscape;
 		}
 	}
 	
@@ -377,16 +378,27 @@ void AVoxelFluidActor::TestFluidSpawn()
 	
 	if (bUseChunkedSystem && ChunkManager)
 	{
-		// Spawn fluid at the center of the world bounds
+		// Test cross-chunk flow by spawning fluid at chunk boundary
 		const FVector WorldCenter = GetActorLocation();
-		const FVector SpawnPos = WorldCenter + FVector(0, 0, 500.0f); // Spawn above center
 		
-		// Create a 5x5x3 area of fluid
-		for (int32 dx = -2; dx <= 2; ++dx)
+		// Get chunk size in world units
+		const float ChunkWorldSize = ChunkSize * CellSize;
+		
+		// Spawn fluid at the boundary between two chunks
+		// This will test if fluid flows properly between chunks
+		const FVector SpawnPos = WorldCenter + FVector(ChunkWorldSize - CellSize, 0, 500.0f);
+		
+		UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Testing cross-chunk flow at chunk boundary"));
+		UE_LOG(LogTemp, Log, TEXT("  Chunk size: %d cells, Cell size: %.1f units, Chunk world size: %.1f units"), 
+			ChunkSize, CellSize, ChunkWorldSize);
+		UE_LOG(LogTemp, Log, TEXT("  Spawning fluid at: %s"), *SpawnPos.ToString());
+		
+		// Create a 6x6x5 area of fluid that spans chunk boundary
+		for (int32 dx = -3; dx <= 3; ++dx)
 		{
-			for (int32 dy = -2; dy <= 2; ++dy)
+			for (int32 dy = -3; dy <= 3; ++dy)
 			{
-				for (int32 dz = 0; dz <= 2; ++dz)
+				for (int32 dz = 0; dz <= 4; ++dz)
 				{
 					const FVector FluidSpawnPos = SpawnPos + FVector(dx * CellSize, dy * CellSize, dz * CellSize);
 					ChunkManager->AddFluidAtWorldPosition(FluidSpawnPos, DebugFluidSpawnAmount);
@@ -394,8 +406,18 @@ void AVoxelFluidActor::TestFluidSpawn()
 			}
 		}
 		
-		UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Test fluid spawned in chunked system at world position %s"), 
-			   *SpawnPos.ToString());
+		// Check which chunks received fluid
+		TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
+		UE_LOG(LogTemp, Log, TEXT("  Active chunks after spawn: %d"), ActiveChunks.Num());
+		for (UFluidChunk* Chunk : ActiveChunks)
+		{
+			if (Chunk && Chunk->HasActiveFluid())
+			{
+				UE_LOG(LogTemp, Log, TEXT("    Chunk [%d,%d,%d] has %.2f fluid volume"), 
+					Chunk->ChunkCoord.X, Chunk->ChunkCoord.Y, Chunk->ChunkCoord.Z, 
+					Chunk->GetTotalFluidVolume());
+			}
+		}
 	}
 	else if (FluidGrid)
 	{

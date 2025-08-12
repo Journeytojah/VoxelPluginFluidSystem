@@ -685,8 +685,8 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 				
 				if (IdxA != -1 && IdxB != -1)
 				{
-					FCAFluidCell& CellA = ChunkA->Cells[IdxA];
-					FCAFluidCell& CellB = ChunkB->Cells[IdxB];
+					FCAFluidCell& CellA = ChunkA->NextCells[IdxA]; // Use NextCells for consistency
+					FCAFluidCell& CellB = ChunkB->NextCells[IdxB];
 					
 					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
 					{
@@ -703,10 +703,19 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 							
 							if (ActualFlow > 0.0f)
 							{
-								ChunkA->NextCells[IdxA].FluidLevel -= ActualFlow;
-								ChunkB->NextCells[IdxB].FluidLevel += ActualFlow;
+								CellA.FluidLevel -= ActualFlow;
+								CellB.FluidLevel += ActualFlow;
+								
+								// Wake up the border cells
+								CellA.bSettled = false;
+								CellA.SettledCounter = 0;
+								CellB.bSettled = false;
+								CellB.SettledCounter = 0;
+								
 								ChunkA->bDirty = true;
 								ChunkB->bDirty = true;
+								ChunkA->ConsiderMeshUpdate(ActualFlow);
+								ChunkB->ConsiderMeshUpdate(ActualFlow);
 							}
 						}
 					}
@@ -726,8 +735,8 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 				
 				if (IdxA != -1 && IdxB != -1)
 				{
-					FCAFluidCell& CellA = ChunkA->Cells[IdxA];
-					FCAFluidCell& CellB = ChunkB->Cells[IdxB];
+					FCAFluidCell& CellA = ChunkA->NextCells[IdxA];
+					FCAFluidCell& CellB = ChunkB->NextCells[IdxB];
 					
 					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
 					{
@@ -743,10 +752,19 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 							
 							if (ActualFlow > 0.0f)
 							{
-								ChunkA->NextCells[IdxA].FluidLevel -= ActualFlow;
-								ChunkB->NextCells[IdxB].FluidLevel += ActualFlow;
+								CellA.FluidLevel -= ActualFlow;
+								CellB.FluidLevel += ActualFlow;
+								
+								// Wake up the border cells
+								CellA.bSettled = false;
+								CellA.SettledCounter = 0;
+								CellB.bSettled = false;
+								CellB.SettledCounter = 0;
+								
 								ChunkA->bDirty = true;
 								ChunkB->bDirty = true;
+								ChunkA->ConsiderMeshUpdate(ActualFlow);
+								ChunkB->ConsiderMeshUpdate(ActualFlow);
 							}
 						}
 					}
@@ -766,8 +784,8 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 				
 				if (IdxA != -1 && IdxB != -1)
 				{
-					FCAFluidCell& CellA = ChunkA->Cells[IdxA];
-					FCAFluidCell& CellB = ChunkB->Cells[IdxB];
+					FCAFluidCell& CellA = ChunkA->NextCells[IdxA];
+					FCAFluidCell& CellB = ChunkB->NextCells[IdxB];
 					
 					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
 					{
@@ -783,10 +801,19 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 							
 							if (ActualFlow > 0.0f)
 							{
-								ChunkA->NextCells[IdxA].FluidLevel -= ActualFlow;
-								ChunkB->NextCells[IdxB].FluidLevel += ActualFlow;
+								CellA.FluidLevel -= ActualFlow;
+								CellB.FluidLevel += ActualFlow;
+								
+								// Wake up the border cells
+								CellA.bSettled = false;
+								CellA.SettledCounter = 0;
+								CellB.bSettled = false;
+								CellB.SettledCounter = 0;
+								
 								ChunkA->bDirty = true;
 								ChunkB->bDirty = true;
+								ChunkA->ConsiderMeshUpdate(ActualFlow);
+								ChunkB->ConsiderMeshUpdate(ActualFlow);
 							}
 						}
 					}
@@ -806,8 +833,8 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 				
 				if (IdxA != -1 && IdxB != -1)
 				{
-					FCAFluidCell& CellA = ChunkA->Cells[IdxA];
-					FCAFluidCell& CellB = ChunkB->Cells[IdxB];
+					FCAFluidCell& CellA = ChunkA->NextCells[IdxA];
+					FCAFluidCell& CellB = ChunkB->NextCells[IdxB];
 					
 					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
 					{
@@ -823,10 +850,19 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 							
 							if (ActualFlow > 0.0f)
 							{
-								ChunkA->NextCells[IdxA].FluidLevel -= ActualFlow;
-								ChunkB->NextCells[IdxB].FluidLevel += ActualFlow;
+								CellA.FluidLevel -= ActualFlow;
+								CellB.FluidLevel += ActualFlow;
+								
+								// Wake up the border cells
+								CellA.bSettled = false;
+								CellA.SettledCounter = 0;
+								CellB.bSettled = false;
+								CellB.SettledCounter = 0;
+								
 								ChunkA->bDirty = true;
 								ChunkB->bDirty = true;
+								ChunkA->ConsiderMeshUpdate(ActualFlow);
+								ChunkB->ConsiderMeshUpdate(ActualFlow);
 							}
 						}
 					}
@@ -846,8 +882,8 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 				
 				if (IdxA != -1 && IdxB != -1)
 				{
-					FCAFluidCell& CellA = ChunkA->Cells[IdxA];
-					FCAFluidCell& CellB = ChunkB->Cells[IdxB];
+					FCAFluidCell& CellA = ChunkA->NextCells[IdxA];
+					FCAFluidCell& CellB = ChunkB->NextCells[IdxB];
 					
 					// Only allow upward flow if there's significant pressure
 					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel >= ChunkA->MaxFluidLevel * 0.95f)
@@ -879,8 +915,8 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 				
 				if (IdxA != -1 && IdxB != -1)
 				{
-					FCAFluidCell& CellA = ChunkA->Cells[IdxA];
-					FCAFluidCell& CellB = ChunkB->Cells[IdxB];
+					FCAFluidCell& CellA = ChunkA->NextCells[IdxA];
+					FCAFluidCell& CellB = ChunkB->NextCells[IdxB];
 					
 					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
 					{

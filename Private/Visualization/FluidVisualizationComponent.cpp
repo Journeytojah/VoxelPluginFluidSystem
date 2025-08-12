@@ -87,8 +87,9 @@ void UFluidVisualizationComponent::TickComponent(float DeltaTime, ELevelTick Tic
 						
 						if (CellIdx >= 0 && CellIdx < FluidGrid->Cells.Num())
 						{
-							const FVector Velocity = FluidGrid->Cells[CellIdx].FlowVelocity;
-							if (Velocity.Size() > 0.1f)
+							// Velocity tracking removed in simplified CA
+							const FVector Velocity = FVector::ZeroVector;
+							if (false) // Disabled velocity visualization
 							{
 								DrawDebugDirectionalArrow(GetWorld(), CellPos, CellPos + Velocity * FlowVectorScale, 
 														  20.0f, FColor::Cyan, false, -1.0f, 0, 2.0f);
@@ -361,8 +362,9 @@ void UFluidVisualizationComponent::DrawChunkedDebugFluid()
 							
 							if (CellIdx >= 0 && CellIdx < Chunk->Cells.Num())
 							{
-								const FVector Velocity = Chunk->Cells[CellIdx].FlowVelocity;
-								if (Velocity.Size() > 0.1f)
+								// Velocity tracking removed in simplified CA
+								const FVector Velocity = FVector::ZeroVector;
+								if (false) // Disabled velocity visualization
 								{
 									DrawDebugDirectionalArrow(GetWorld(), CellPos, CellPos + Velocity * FlowVectorScale, 
 															  20.0f, FColor::Cyan, false, -1.0f, 0, 2.0f);
@@ -675,6 +677,7 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 	
 	const FVector ViewerPos = GetPrimaryViewerPosition();
 	const TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
+	const float CurrentTime = FPlatformTime::Seconds();
 	
 	// Reset rendering stats counters
 	int32 RenderedChunks = 0;
@@ -683,6 +686,31 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 	int32 LOD0Meshes = 0;
 	int32 LOD1Meshes = 0;
 	int32 LOD2Meshes = 0;
+	
+	// Step 0: Periodically check which chunks need updates
+	ChunkMeshCheckTimer += GetWorld()->GetDeltaSeconds();
+	if (ChunkMeshCheckTimer >= ChunkMeshCheckInterval)
+	{
+		ChunkMeshCheckTimer = 0.0f;
+		ChunksNeedingMeshUpdate.Empty();
+		
+		// Check each active chunk to see if it needs an update
+		for (UFluidChunk* Chunk : ActiveChunks)
+		{
+			if (!Chunk || !ShouldRenderChunk(Chunk, ViewerPos))
+				continue;
+				
+			// Check if chunk has been updated recently
+			float* LastUpdateTime = ChunkLastMeshUpdateTime.Find(Chunk);
+			float TimeSinceUpdate = LastUpdateTime ? (CurrentTime - *LastUpdateTime) : 999.0f;
+			
+			// Only consider update if enough time has passed and chunk is dirty
+			if (TimeSinceUpdate > 0.5f && Chunk->ShouldRegenerateMesh())
+			{
+				ChunksNeedingMeshUpdate.Add(Chunk);
+			}
+		}
+	}
 	
 	// Step 1: Clean up meshes for chunks that are no longer active or out of range
 	TArray<UFluidChunk*> ChunksToRemove;
@@ -724,10 +752,16 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 		ChunkMarchingCubesMeshes.Remove(ChunkToRemove);
 	}
 	
-	// Step 2: Process each active chunk that should be rendered
-	for (UFluidChunk* Chunk : ActiveChunks)
+	// Step 2: Process chunks that need mesh updates (limited per frame)
+	int32 ChunksUpdatedThisFrame = 0;
+	
+	// First process chunks that explicitly need updates
+	for (UFluidChunk* Chunk : ChunksNeedingMeshUpdate)
 	{
-		if (!ShouldRenderChunk(Chunk, ViewerPos))
+		if (ChunksUpdatedThisFrame >= MaxChunksToUpdatePerFrame)
+			break;
+			
+		if (!Chunk || !ShouldRenderChunk(Chunk, ViewerPos))
 			continue;
 			
 		// Calculate LOD level based on distance
@@ -846,11 +880,44 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 			ChunkMesh->ClearAllMeshSections();
 			ChunkMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UVs, VertexColors, TArray<FProcMeshTangent>(), bGenerateCollision);
 			RenderedChunks++;
+			
+			// Track that we updated this chunk
+			ChunkLastMeshUpdateTime.Add(Chunk, CurrentTime);
+			ChunksUpdatedThisFrame++;
+			
+			// Remove from pending updates
+			ChunksNeedingMeshUpdate.Remove(Chunk);
 		}
 		else
 		{
 			// No fluid in chunk, clear mesh
 			ChunkMesh->ClearAllMeshSections();
+			ChunkLastMeshUpdateTime.Add(Chunk, CurrentTime);
+		}
+	}
+	
+	// Step 3: Also check for chunks that have never been rendered (new chunks)
+	for (UFluidChunk* Chunk : ActiveChunks)
+	{
+		if (ChunksUpdatedThisFrame >= MaxChunksToUpdatePerFrame)
+			break;
+			
+		// Skip if already processed or doesn't need rendering
+		if (!Chunk || !ShouldRenderChunk(Chunk, ViewerPos))
+			continue;
+			
+		// Skip if already has a mesh
+		if (ChunkMarchingCubesMeshes.Contains(Chunk))
+			continue;
+			
+		// This is a new chunk that needs initial mesh generation
+		ChunksNeedingMeshUpdate.Add(Chunk);
+		
+		// Process it immediately if we have capacity
+		if (ChunksUpdatedThisFrame < MaxChunksToUpdatePerFrame)
+		{
+			// [The same mesh generation code would go here, but it's already in the loop above]
+			// For now, we'll let it be processed in the next frame
 		}
 	}
 	
@@ -861,6 +928,15 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 	SET_DWORD_STAT(STAT_VoxelFluid_LOD0Meshes, LOD0Meshes);
 	SET_DWORD_STAT(STAT_VoxelFluid_LOD1Meshes, LOD1Meshes);
 	SET_DWORD_STAT(STAT_VoxelFluid_LOD2Meshes, LOD2Meshes);
+	
+	// Log performance info periodically
+	static float LastLogTime = 0.0f;
+	if (CurrentTime - LastLogTime > 2.0f)
+	{
+		UE_LOG(LogTemp, Log, TEXT("Marching Cubes: %d chunks rendered, %d cached, %d generated this frame, %d pending updates"),
+			RenderedChunks, CachedMeshesUsed, MeshesGenerated, ChunksNeedingMeshUpdate.Num());
+		LastLogTime = CurrentTime;
+	}
 }
 
 void UFluidVisualizationComponent::UpdateDensityInterpolation(float DeltaTime)
