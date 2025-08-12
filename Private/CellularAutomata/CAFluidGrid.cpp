@@ -563,6 +563,79 @@ void UCAFluidGrid::SetTerrainHeight(int32 X, int32 Y, float Height)
 	}
 }
 
+void UCAFluidGrid::SetCellSolid(int32 X, int32 Y, int32 Z, bool bSolid)
+{
+	const int32 Idx = GetCellIndex(X, Y, Z);
+	if (Idx != -1)
+	{
+		FCAFluidCell& Cell = Cells[Idx];
+		bool bWasSolid = Cell.bIsSolid;
+		Cell.bIsSolid = bSolid;
+		
+		// If cell became solid, remove any fluid
+		if (bSolid && !bWasSolid)
+		{
+			Cell.FluidLevel = 0.0f;
+			Cell.bSettled = false;
+			Cell.SettledCounter = 0;
+			
+			// Wake up neighbors since terrain changed
+			if (bEnableSettling)
+			{
+				WakeUpNeighbors(X, Y, Z);
+				// Also wake up cells above in case they need to flow down
+				if (Z < GridSizeZ - 1)
+				{
+					WakeUpNeighbors(X, Y, Z + 1);
+				}
+			}
+		}
+		// If cell became empty, wake up neighbors so fluid can flow in
+		else if (!bSolid && bWasSolid)
+		{
+			// Wake up all surrounding cells including above
+			if (bEnableSettling)
+			{
+				WakeUpNeighbors(X, Y, Z);
+				
+				// Wake up cells above so they can fall into this newly empty space
+				if (Z < GridSizeZ - 1)
+				{
+					WakeUpNeighbors(X, Y, Z + 1);
+					// Wake up multiple cells above to ensure water flows down
+					if (Z < GridSizeZ - 2)
+					{
+						WakeUpNeighbors(X, Y, Z + 2);
+					}
+				}
+				
+				// Also wake up cells to the sides at the level above
+				// This helps water flow into holes from the sides
+				if (Z < GridSizeZ - 1)
+				{
+					if (X > 0) MarkCellForUpdate(X - 1, Y, Z + 1);
+					if (X < GridSizeX - 1) MarkCellForUpdate(X + 1, Y, Z + 1);
+					if (Y > 0) MarkCellForUpdate(X, Y - 1, Z + 1);
+					if (Y < GridSizeY - 1) MarkCellForUpdate(X, Y + 1, Z + 1);
+				}
+			}
+			
+			// Mark this cell as needing update
+			MarkCellForUpdate(X, Y, Z);
+		}
+	}
+}
+
+bool UCAFluidGrid::IsCellSolid(int32 X, int32 Y, int32 Z) const
+{
+	const int32 Idx = GetCellIndex(X, Y, Z);
+	if (Idx != -1)
+	{
+		return Cells[Idx].bIsSolid;
+	}
+	return true; // Out of bounds cells are considered solid
+}
+
 FVector UCAFluidGrid::GetWorldPositionFromCell(int32 X, int32 Y, int32 Z) const
 {
 	return GridOrigin + FVector(X * CellSize, Y * CellSize, Z * CellSize);
@@ -664,6 +737,33 @@ float UCAFluidGrid::GetSettlingPercentage() const
 		return 100.0f; // No fluid cells, consider it 100% settled
 		
 	return (TotalSettledCells * 100.0f) / FluidCellCount;
+}
+
+void UCAFluidGrid::ForceWakeAllFluid()
+{
+	// Wake up all cells with fluid
+	for (int32 z = 0; z < GridSizeZ; ++z)
+	{
+		for (int32 y = 0; y < GridSizeY; ++y)
+		{
+			for (int32 x = 0; x < GridSizeX; ++x)
+			{
+				const int32 Idx = GetCellIndex(x, y, z);
+				if (Idx != -1)
+				{
+					FCAFluidCell& Cell = Cells[Idx];
+					if (Cell.FluidLevel > MinFluidLevel && !Cell.bIsSolid)
+					{
+						Cell.bSettled = false;
+						Cell.SettledCounter = 0;
+						MarkCellForUpdate(x, y, z);
+					}
+				}
+			}
+		}
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("ForceWakeAllFluid: Woke up all fluid cells"));
 }
 
 // Settling optimization helper methods

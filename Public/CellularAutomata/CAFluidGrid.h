@@ -67,6 +67,12 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid CA")
 	void SetTerrainHeight(int32 X, int32 Y, float Height);
+	
+	UFUNCTION(BlueprintCallable, Category = "Fluid CA")
+	void SetCellSolid(int32 X, int32 Y, int32 Z, bool bSolid);
+	
+	UFUNCTION(BlueprintCallable, Category = "Fluid CA")
+	bool IsCellSolid(int32 X, int32 Y, int32 Z) const;
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid CA")
 	FVector GetWorldPositionFromCell(int32 X, int32 Y, int32 Z) const;
@@ -89,6 +95,9 @@ public:
 	
 	UFUNCTION(BlueprintCallable, Category = "Fluid CA Debug")
 	float GetSettlingPercentage() const;
+	
+	UFUNCTION(BlueprintCallable, Category = "Fluid CA")
+	void ForceWakeAllFluid();
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid Settings")
 	float CellSize = 100.0f;

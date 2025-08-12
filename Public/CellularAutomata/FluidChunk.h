@@ -158,6 +158,8 @@ public:
 	float GetFluidAt(int32 LocalX, int32 LocalY, int32 LocalZ) const;
 	
 	void SetTerrainHeight(int32 LocalX, int32 LocalY, float Height);
+	void SetCellSolid(int32 LocalX, int32 LocalY, int32 LocalZ, bool bSolid);
+	bool IsCellSolid(int32 LocalX, int32 LocalY, int32 LocalZ) const;
 	
 	FVector GetWorldPositionFromLocal(int32 LocalX, int32 LocalY, int32 LocalZ) const;
 	bool GetLocalFromWorldPosition(const FVector& WorldPos, int32& OutX, int32& OutY, int32& OutZ) const;

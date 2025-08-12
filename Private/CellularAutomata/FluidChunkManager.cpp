@@ -407,6 +407,48 @@ TArray<UFluidChunk*> UFluidChunkManager::GetChunksInRadius(const FVector& Center
 	return Result;
 }
 
+TArray<FFluidChunkCoord> UFluidChunkManager::GetChunksInBounds(const FBox& Bounds) const
+{
+	TArray<FFluidChunkCoord> Result;
+	
+	if (!bIsInitialized)
+		return Result;
+	
+	// Calculate chunk range from bounds
+	const float ChunkWorldSize = ChunkSize * CellSize;
+	
+	const int32 MinChunkX = FMath::FloorToInt((Bounds.Min.X - WorldOrigin.X) / ChunkWorldSize);
+	const int32 MaxChunkX = FMath::CeilToInt((Bounds.Max.X - WorldOrigin.X) / ChunkWorldSize);
+	const int32 MinChunkY = FMath::FloorToInt((Bounds.Min.Y - WorldOrigin.Y) / ChunkWorldSize);
+	const int32 MaxChunkY = FMath::CeilToInt((Bounds.Max.Y - WorldOrigin.Y) / ChunkWorldSize);
+	const int32 MinChunkZ = FMath::FloorToInt((Bounds.Min.Z - WorldOrigin.Z) / ChunkWorldSize);
+	const int32 MaxChunkZ = FMath::CeilToInt((Bounds.Max.Z - WorldOrigin.Z) / ChunkWorldSize);
+	
+	// Iterate through all possible chunks in the bounds
+	for (int32 X = MinChunkX; X <= MaxChunkX; ++X)
+	{
+		for (int32 Y = MinChunkY; Y <= MaxChunkY; ++Y)
+		{
+			for (int32 Z = MinChunkZ; Z <= MaxChunkZ; ++Z)
+			{
+				FFluidChunkCoord Coord(X, Y, Z);
+				
+				// Check if chunk actually overlaps with bounds
+				const FVector ChunkMin = WorldOrigin + FVector(X * ChunkWorldSize, Y * ChunkWorldSize, Z * ChunkWorldSize);
+				const FVector ChunkMax = ChunkMin + FVector(ChunkWorldSize, ChunkWorldSize, ChunkWorldSize);
+				const FBox ChunkBounds(ChunkMin, ChunkMax);
+				
+				if (Bounds.Intersect(ChunkBounds))
+				{
+					Result.Add(Coord);
+				}
+			}
+		}
+	}
+	
+	return Result;
+}
+
 FChunkManagerStats UFluidChunkManager::GetStats() const
 {
 	FChunkManagerStats Stats;

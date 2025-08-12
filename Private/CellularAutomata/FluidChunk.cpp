@@ -221,6 +221,63 @@ void UFluidChunk::SetTerrainHeight(int32 LocalX, int32 LocalY, float Height)
 	bDirty = true;
 }
 
+void UFluidChunk::SetCellSolid(int32 LocalX, int32 LocalY, int32 LocalZ, bool bSolid)
+{
+	const int32 Idx = GetLocalCellIndex(LocalX, LocalY, LocalZ);
+	if (Idx != -1)
+	{
+		bool bWasSolid = Cells[Idx].bIsSolid;
+		Cells[Idx].bIsSolid = bSolid;
+		NextCells[Idx].bIsSolid = bSolid;
+		
+		// If cell became solid, remove any fluid
+		if (bSolid && !bWasSolid)
+		{
+			Cells[Idx].FluidLevel = 0.0f;
+			Cells[Idx].bSettled = false;
+			Cells[Idx].SettledCounter = 0;
+			NextCells[Idx].FluidLevel = 0.0f;
+			NextCells[Idx].bSettled = false;
+			NextCells[Idx].SettledCounter = 0;
+			
+			// Mark as needing mesh update
+			ConsiderMeshUpdate(1.0f);
+		}
+		// If cell became empty, wake it up for potential flow
+		else if (!bSolid && bWasSolid)
+		{
+			Cells[Idx].bSettled = false;
+			Cells[Idx].SettledCounter = 0;
+			NextCells[Idx].bSettled = false;
+			NextCells[Idx].SettledCounter = 0;
+			
+			// Mark as needing mesh update
+			ConsiderMeshUpdate(1.0f);
+		}
+		
+		bDirty = true;
+		
+		// If border cell changed, mark border dirty
+		bool bIsBorderCell = (LocalX == 0 || LocalX == ChunkSize - 1 || 
+							  LocalY == 0 || LocalY == ChunkSize - 1 || 
+							  LocalZ == 0 || LocalZ == ChunkSize - 1);
+		if (bIsBorderCell)
+		{
+			bBorderDirty = true;
+		}
+	}
+}
+
+bool UFluidChunk::IsCellSolid(int32 LocalX, int32 LocalY, int32 LocalZ) const
+{
+	const int32 Idx = GetLocalCellIndex(LocalX, LocalY, LocalZ);
+	if (Idx != -1)
+	{
+		return Cells[Idx].bIsSolid;
+	}
+	return true; // Out of bounds cells are considered solid
+}
+
 FVector UFluidChunk::GetWorldPositionFromLocal(int32 LocalX, int32 LocalY, int32 LocalZ) const
 {
 	return ChunkWorldPosition + FVector(LocalX * CellSize, LocalY * CellSize, LocalZ * CellSize);

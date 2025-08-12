@@ -116,6 +116,7 @@ public:
 	
 	TArray<UFluidChunk*> GetActiveChunks() const;
 	TArray<UFluidChunk*> GetChunksInRadius(const FVector& Center, float Radius) const;
+	TArray<FFluidChunkCoord> GetChunksInBounds(const FBox& Bounds) const;
 	
 	FChunkManagerStats GetStats() const;
 	
