@@ -9,12 +9,14 @@ class UFluidChunkManager;
 class UMaterialInterface;
 class UInstancedStaticMeshComponent;
 class UFluidChunk;
+class UProceduralMeshComponent;
 
 UENUM(BlueprintType)
 enum class EFluidRenderMode : uint8
 {
 	Instances UMETA(DisplayName = "Instanced Meshes"),
-	Debug UMETA(DisplayName = "Debug Boxes")
+	Debug UMETA(DisplayName = "Debug Boxes"),
+	MarchingCubes UMETA(DisplayName = "Marching Cubes Mesh")
 };
 
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
@@ -84,6 +86,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Visualization")
 	bool bUseLODForVisualization = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "0.01", ClampMax = "1.0"))
+	float MarchingCubesIsoLevel = 0.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
+	bool bSmoothNormals = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
+	bool bGenerateCollision = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
+	bool bFlipNormals = true;
+
 private:
 	UPROPERTY()
 	UCAFluidGrid* FluidGrid;
@@ -94,6 +108,9 @@ private:
 	UPROPERTY()
 	UInstancedStaticMeshComponent* InstancedMeshComponent;
 
+	UPROPERTY()
+	UProceduralMeshComponent* MarchingCubesMesh;
+
 	float MeshUpdateTimer = 0.0f;
 	bool bUseChunkedSystem = false;
 
@@ -101,10 +118,13 @@ private:
 	void DrawChunkedDebugFluid();
 	void UpdateInstancedMeshes();
 	void UpdateChunkedInstancedMeshes();
+	void GenerateMarchingCubesVisualization();
+	void GenerateChunkedMarchingCubes();
 	void RenderFluidChunk(UFluidChunk* Chunk, const FVector& ViewerPosition);
 	bool ShouldRenderChunk(UFluidChunk* Chunk, const FVector& ViewerPosition) const;
 	FVector GetPrimaryViewerPosition() const;
 	void DrawChunkBounds() const;
 	
 	TMap<UFluidChunk*, UInstancedStaticMeshComponent*> ChunkMeshComponents;
+	TMap<UFluidChunk*, UProceduralMeshComponent*> ChunkMarchingCubesMeshes;
 };

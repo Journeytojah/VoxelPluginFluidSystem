@@ -1,8 +1,11 @@
 #include "Visualization/FluidVisualizationComponent.h"
+#include "Visualization/MarchingCubes.h"
 #include "CellularAutomata/CAFluidGrid.h"
 #include "CellularAutomata/FluidChunkManager.h"
 #include "CellularAutomata/FluidChunk.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "ProceduralMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "Engine/StaticMesh.h"
@@ -33,6 +36,17 @@ void UFluidVisualizationComponent::BeginPlay()
 		if (FluidMaterial)
 		{
 			InstancedMeshComponent->SetMaterial(0, FluidMaterial);
+		}
+	}
+	else if (RenderMode == EFluidRenderMode::MarchingCubes && !MarchingCubesMesh)
+	{
+		MarchingCubesMesh = NewObject<UProceduralMeshComponent>(GetOwner(), UProceduralMeshComponent::StaticClass());
+		MarchingCubesMesh->RegisterComponent();
+		MarchingCubesMesh->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
+		
+		if (FluidMaterial)
+		{
+			MarchingCubesMesh->SetMaterial(0, FluidMaterial);
 		}
 	}
 }
@@ -99,6 +113,9 @@ void UFluidVisualizationComponent::UpdateVisualization()
 		{
 			case EFluidRenderMode::Instances:
 				GenerateInstancedVisualization();
+				break;
+			case EFluidRenderMode::MarchingCubes:
+				GenerateMarchingCubesVisualization();
 				break;
 			case EFluidRenderMode::Debug:
 			default:
@@ -230,6 +247,9 @@ void UFluidVisualizationComponent::GenerateChunkedVisualization()
 	{
 		case EFluidRenderMode::Instances:
 			UpdateChunkedInstancedMeshes();
+			break;
+		case EFluidRenderMode::MarchingCubes:
+			GenerateChunkedMarchingCubes();
 			break;
 		case EFluidRenderMode::Debug:
 		default:
@@ -526,4 +546,167 @@ void UFluidVisualizationComponent::DrawChunkBounds() const
 	
 	// Use the more detailed chunk manager debug visualization instead
 	ChunkManager->DrawDebugChunks(GetWorld());
+}
+
+void UFluidVisualizationComponent::GenerateMarchingCubesVisualization()
+{
+	if (!FluidGrid || !MarchingCubesMesh)
+		return;
+
+	// Create density grid from fluid grid
+	TArray<float> DensityGrid;
+	const int32 GridSizeX = FluidGrid->GridSizeX;
+	const int32 GridSizeY = FluidGrid->GridSizeY;
+	const int32 GridSizeZ = FluidGrid->GridSizeZ;
+	
+	DensityGrid.Reserve(GridSizeX * GridSizeY * GridSizeZ);
+	
+	// Convert fluid levels to density values
+	for (int32 Z = 0; Z < GridSizeZ; ++Z)
+	{
+		for (int32 Y = 0; Y < GridSizeY; ++Y)
+		{
+			for (int32 X = 0; X < GridSizeX; ++X)
+			{
+				const float FluidLevel = FluidGrid->GetFluidAt(X, Y, Z);
+				DensityGrid.Add(FluidLevel);
+			}
+		}
+	}
+	
+	// Generate marching cubes mesh
+	TArray<FMarchingCubes::FMarchingCubesVertex> MarchingVertices;
+	TArray<FMarchingCubes::FMarchingCubesTriangle> MarchingTriangles;
+	
+	FMarchingCubes::GenerateGridMesh(
+		DensityGrid,
+		FIntVector(GridSizeX, GridSizeY, GridSizeZ),
+		FluidGrid->CellSize,
+		FluidGrid->GridOrigin,
+		MarchingCubesIsoLevel,
+		MarchingVertices,
+		MarchingTriangles
+	);
+	
+	// Convert to UE4 procedural mesh format
+	TArray<FVector> Vertices;
+	TArray<int32> Triangles;
+	TArray<FVector> Normals;
+	TArray<FVector2D> UVs;
+	TArray<FColor> VertexColors;
+	
+	Vertices.Reserve(MarchingVertices.Num());
+	Normals.Reserve(MarchingVertices.Num());
+	UVs.Reserve(MarchingVertices.Num());
+	VertexColors.Reserve(MarchingVertices.Num());
+	Triangles.Reserve(MarchingTriangles.Num() * 3);
+	
+	// Convert vertices
+	for (const auto& MarchingVertex : MarchingVertices)
+	{
+		Vertices.Add(MarchingVertex.Position);
+		Normals.Add(bFlipNormals ? -MarchingVertex.Normal : MarchingVertex.Normal);
+		UVs.Add(MarchingVertex.UV);
+		VertexColors.Add(FColor::Blue); // Default fluid color
+	}
+	
+	// Convert triangles (correct winding order for upward-facing normals)
+	for (const auto& MarchingTriangle : MarchingTriangles)
+	{
+		Triangles.Add(MarchingTriangle.VertexIndices[0]);
+		Triangles.Add(MarchingTriangle.VertexIndices[1]);
+		Triangles.Add(MarchingTriangle.VertexIndices[2]);
+	}
+	
+	// Update procedural mesh
+	MarchingCubesMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UVs, VertexColors, TArray<FProcMeshTangent>(), bGenerateCollision);
+}
+
+void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
+{
+	if (!ChunkManager)
+		return;
+		
+	const FVector ViewerPos = GetPrimaryViewerPosition();
+	const TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
+	
+	// Process each active chunk
+	for (UFluidChunk* Chunk : ActiveChunks)
+	{
+		if (!ShouldRenderChunk(Chunk, ViewerPos))
+			continue;
+			
+		// Get or create procedural mesh component for this chunk
+		UProceduralMeshComponent* ChunkMesh = nullptr;
+		
+		if (UProceduralMeshComponent** ExistingMesh = ChunkMarchingCubesMeshes.Find(Chunk))
+		{
+			ChunkMesh = *ExistingMesh;
+		}
+		else
+		{
+			ChunkMesh = NewObject<UProceduralMeshComponent>(GetOwner());
+			ChunkMesh->RegisterComponent();
+			ChunkMesh->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
+			
+			if (FluidMaterial)
+			{
+				ChunkMesh->SetMaterial(0, FluidMaterial);
+			}
+			
+			ChunkMarchingCubesMeshes.Add(Chunk, ChunkMesh);
+		}
+		
+		// Generate marching cubes mesh for this chunk
+		TArray<FMarchingCubes::FMarchingCubesVertex> MarchingVertices;
+		TArray<FMarchingCubes::FMarchingCubesTriangle> MarchingTriangles;
+		
+		FMarchingCubes::GenerateChunkMesh(Chunk, MarchingCubesIsoLevel, MarchingVertices, MarchingTriangles);
+		
+		// Convert to UE4 procedural mesh format
+		TArray<FVector> Vertices;
+		TArray<int32> Triangles;
+		TArray<FVector> Normals;
+		TArray<FVector2D> UVs;
+		TArray<FColor> VertexColors;
+		
+		if (MarchingVertices.Num() > 0)
+		{
+			Vertices.Reserve(MarchingVertices.Num());
+			Normals.Reserve(MarchingVertices.Num());
+			UVs.Reserve(MarchingVertices.Num());
+			VertexColors.Reserve(MarchingVertices.Num());
+			Triangles.Reserve(MarchingTriangles.Num() * 3);
+			
+			// Convert vertices
+			for (const auto& MarchingVertex : MarchingVertices)
+			{
+				Vertices.Add(MarchingVertex.Position);
+				Normals.Add(bFlipNormals ? -MarchingVertex.Normal : MarchingVertex.Normal);
+				UVs.Add(MarchingVertex.UV);
+				
+				// Color based on height for visual interest
+				const float HeightFactor = FMath::Clamp((MarchingVertex.Position.Z - Chunk->ChunkWorldPosition.Z) / (Chunk->ChunkSize * Chunk->CellSize), 0.0f, 1.0f);
+				const FColor VertexColor = FColor::MakeRedToGreenColorFromScalar(HeightFactor);
+				VertexColors.Add(VertexColor);
+			}
+			
+			// Convert triangles (correct winding order for upward-facing normals)
+			for (const auto& MarchingTriangle : MarchingTriangles)
+			{
+				Triangles.Add(MarchingTriangle.VertexIndices[0]);
+				Triangles.Add(MarchingTriangle.VertexIndices[1]);
+				Triangles.Add(MarchingTriangle.VertexIndices[2]);
+			}
+			
+			// Update procedural mesh
+			ChunkMesh->ClearAllMeshSections();
+			ChunkMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UVs, VertexColors, TArray<FProcMeshTangent>(), bGenerateCollision);
+		}
+		else
+		{
+			// No fluid in chunk, clear mesh
+			ChunkMesh->ClearAllMeshSections();
+		}
+	}
 }
