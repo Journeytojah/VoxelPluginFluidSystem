@@ -43,8 +43,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
 	void ResetSimulation();
 
-	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
-	void AddFluidSource(const FVector& WorldPosition, float FlowRate);
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid", meta = (CallInEditor = "true"))
+	void AddFluidSource(const FVector& WorldPosition, float FlowRate = -1.0f);
 
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
 	void RemoveFluidSource(const FVector& WorldPosition);
@@ -93,6 +93,12 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Settings")
 	float SimulationSpeed = 1.0f;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Settings", meta = (ClampMin = "0.001", ClampMax = "0.1"))
+	float SimulationTimestep = 0.016f;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Settings")
+	bool bUseFixedTimestep = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid Settings")
 	int32 GridSizeX = 128;
@@ -153,6 +159,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties")
 	float FluidFlowRate = 0.5f;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.0", ClampMax = "10.0"))
+	float DefaultSourceFlowRate = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties")
 	float GravityStrength = 981.0f;
@@ -215,4 +224,7 @@ private:
 	float LastFrameSimulationTime = 0.0f;
 	bool bProfilingEnabled = false;
 	FDateTime LastProfilingTime;
+	
+	// Simulation timing
+	float SimulationAccumulator = 0.0f;
 };

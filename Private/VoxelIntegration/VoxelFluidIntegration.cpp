@@ -59,46 +59,17 @@ void UVoxelFluidIntegration::TickComponent(float DeltaTime, ELevelTick TickType,
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	
-	if (bUseChunkedSystem)
+	// Disable automatic terrain updates during tick to avoid hitches
+	// Terrain updates should be triggered explicitly when needed (e.g., when chunks are loaded)
+	// or manually by the user
+	
+	if (bDebugDrawCells)
 	{
-		// Chunked system is handled by VoxelFluidActor, we just handle terrain updates here
-		if (bAutoUpdateTerrain)
-		{
-			TerrainUpdateTimer += DeltaTime;
-			if (TerrainUpdateTimer >= TerrainUpdateInterval)
-			{
-				TerrainUpdateTimer = 0.0f;
-				UpdateChunkedTerrainHeights();
-			}
-		}
-		
-		if (bDebugDrawCells)
+		if (bUseChunkedSystem)
 		{
 			DrawChunkedDebugFluid();
 		}
-	}
-	else
-	{
-		if (!FluidGrid)
-			return;
-		
-		FluidGrid->UpdateSimulation(DeltaTime);
-		
-		if (bAutoUpdateTerrain)
-		{
-			TerrainUpdateTimer += DeltaTime;
-			if (TerrainUpdateTimer >= TerrainUpdateInterval)
-			{
-				TerrainUpdateTimer = 0.0f;
-				UpdateTerrainHeights();
-			}
-		}
-		
-		// Disable debug drawing from VoxelFluidIntegration to avoid conflicts with FluidVisualizationComponent
-		// if (bDebugDrawCells)
-		// {
-		//	DrawDebugFluid();
-		// }
+		// Grid debug drawing is handled by FluidVisualizationComponent
 	}
 }
 

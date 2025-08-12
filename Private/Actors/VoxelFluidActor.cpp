@@ -96,16 +96,42 @@ void AVoxelFluidActor::Tick(float DeltaTime)
 	if (bIsSimulating)
 	{
 		const double StartTime = FPlatformTime::Seconds();
-		const float ScaledDeltaTime = DeltaTime * SimulationSpeed;
 		
-		if (bUseChunkedSystem && ChunkManager)
+		if (bUseFixedTimestep)
 		{
-			UpdateChunkedSystem(ScaledDeltaTime);
+			// Accumulate time for fixed timestep simulation
+			SimulationAccumulator += DeltaTime * SimulationSpeed;
+			
+			// Run simulation steps at fixed timestep
+			while (SimulationAccumulator >= SimulationTimestep)
+			{
+				if (bUseChunkedSystem && ChunkManager)
+				{
+					UpdateChunkedSystem(SimulationTimestep);
+				}
+				else if (FluidGrid)
+				{
+					UpdateFluidSources(SimulationTimestep);
+					FluidGrid->UpdateSimulation(SimulationTimestep);
+				}
+				
+				SimulationAccumulator -= SimulationTimestep;
+			}
 		}
-		else if (FluidGrid)
+		else
 		{
-			UpdateFluidSources(ScaledDeltaTime);
-			FluidGrid->UpdateSimulation(ScaledDeltaTime);
+			// Variable timestep simulation
+			const float ScaledDeltaTime = DeltaTime * SimulationSpeed;
+			
+			if (bUseChunkedSystem && ChunkManager)
+			{
+				UpdateChunkedSystem(ScaledDeltaTime);
+			}
+			else if (FluidGrid)
+			{
+				UpdateFluidSources(ScaledDeltaTime);
+				FluidGrid->UpdateSimulation(ScaledDeltaTime);
+			}
 		}
 		
 		LastFrameSimulationTime = (FPlatformTime::Seconds() - StartTime) * 1000.0f; // Convert to ms
@@ -256,17 +282,20 @@ void AVoxelFluidActor::ResetSimulation()
 
 void AVoxelFluidActor::AddFluidSource(const FVector& WorldPosition, float FlowRate)
 {
+	// Use DefaultSourceFlowRate if no flow rate is specified
+	const float ActualFlowRate = (FlowRate < 0.0f) ? DefaultSourceFlowRate : FlowRate;
+	
 	if (FluidSources.Contains(WorldPosition))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Fluid source already exists at %s, updating flow rate from %f to %f"), 
-			   *WorldPosition.ToString(), FluidSources[WorldPosition], FlowRate);
-		FluidSources[WorldPosition] = FlowRate;
+			   *WorldPosition.ToString(), FluidSources[WorldPosition], ActualFlowRate);
+		FluidSources[WorldPosition] = ActualFlowRate;
 	}
 	else
 	{
-		FluidSources.Add(WorldPosition, FlowRate);
+		FluidSources.Add(WorldPosition, ActualFlowRate);
 		UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Added new fluid source at %s with flow rate %f"), 
-			   *WorldPosition.ToString(), FlowRate);
+			   *WorldPosition.ToString(), ActualFlowRate);
 	}
 }
 
@@ -391,9 +420,10 @@ void AVoxelFluidActor::UpdateFluidSources(float DeltaTime)
 		for (const auto& Source : FluidSources)
 		{
 			const FVector& SourcePos = Source.Key;
-			const float FlowRate = Source.Value;
+			const float SourceFlowRate = Source.Value;
 			
-			ChunkManager->AddFluidAtWorldPosition(SourcePos, FlowRate * DeltaTime);
+			// Use the source's specific flow rate, not the global one
+			ChunkManager->AddFluidAtWorldPosition(SourcePos, SourceFlowRate * DeltaTime);
 		}
 	}
 	else if (FluidGrid)
@@ -401,14 +431,15 @@ void AVoxelFluidActor::UpdateFluidSources(float DeltaTime)
 		for (const auto& Source : FluidSources)
 		{
 			const FVector& SourcePos = Source.Key;
-			const float FlowRate = Source.Value;
+			const float SourceFlowRate = Source.Value;
 			
 			const FVector LocalPos = SourcePos - GetActorLocation();
 			int32 CellX, CellY, CellZ;
 			
 			if (FluidGrid->GetCellFromWorldPosition(LocalPos, CellX, CellY, CellZ))
 			{
-				FluidGrid->AddFluid(CellX, CellY, CellZ, FlowRate * DeltaTime);
+				// Use the source's specific flow rate, not the global one
+				FluidGrid->AddFluid(CellX, CellY, CellZ, SourceFlowRate * DeltaTime);
 			}
 		}
 	}
@@ -527,11 +558,8 @@ void AVoxelFluidActor::UpdateGridOriginForMovement()
 	{
 		FluidGrid->GridOrigin = NewGridOrigin;
 		
-		// Update terrain data when grid moves
-		if (VoxelIntegration && VoxelIntegration->bAutoUpdateTerrain)
-		{
-			VoxelIntegration->UpdateTerrainHeights();
-		}
+		// Don't auto-update terrain when grid moves to avoid hitches
+		// User can manually call RefreshTerrainData if needed
 	}
 }
 
@@ -658,11 +686,12 @@ void AVoxelFluidActor::UpdateChunkedSystem(float DeltaTime)
 	
 	ChunkManager->UpdateChunks(DeltaTime, ViewerPositions);
 	
+	// Add fluid from all active sources using their individual flow rates
 	for (const auto& Source : FluidSources)
 	{
 		const FVector& SourcePos = Source.Key;
-		const float FlowRate = Source.Value;
-		ChunkManager->AddFluidAtWorldPosition(SourcePos, FlowRate * DeltaTime);
+		const float SourceFlowRate = Source.Value;
+		ChunkManager->AddFluidAtWorldPosition(SourcePos, SourceFlowRate * DeltaTime);
 	}
 	
 	ChunkManager->UpdateSimulation(DeltaTime);
