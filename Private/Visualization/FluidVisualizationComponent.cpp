@@ -524,37 +524,6 @@ void UFluidVisualizationComponent::DrawChunkBounds() const
 	if (!ChunkManager || !GetWorld())
 		return;
 	
-	const TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
-	
-	for (UFluidChunk* Chunk : ActiveChunks)
-	{
-		if (!Chunk)
-			continue;
-		
-		const FBox ChunkBounds = Chunk->GetWorldBounds();
-		FColor BoundColor = FColor::White;
-		
-		switch (Chunk->State)
-		{
-			case EChunkState::Active:
-				BoundColor = FColor::Green;
-				break;
-			case EChunkState::Inactive:
-				BoundColor = FColor::Yellow;
-				break;
-			case EChunkState::BorderOnly:
-				BoundColor = FColor::Orange;
-				break;
-			default:
-				BoundColor = FColor::Red;
-				break;
-		}
-		
-		DrawDebugBox(GetWorld(), ChunkBounds.GetCenter(), ChunkBounds.GetExtent(), BoundColor, false, -1.0f, 0, 1.0f);
-		
-		const FString ChunkInfo = FString::Printf(TEXT("Chunk %s\nLOD: %d\nCells: %d"),
-			*Chunk->ChunkCoord.ToString(), Chunk->CurrentLOD, Chunk->GetActiveCellCount());
-		
-		DrawDebugString(GetWorld(), ChunkBounds.GetCenter(), ChunkInfo, nullptr, BoundColor, -1.0f);
-	}
+	// Use the more detailed chunk manager debug visualization instead
+	ChunkManager->DrawDebugChunks(GetWorld());
 }

@@ -177,6 +177,15 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	float DebugFluidSpawnAmount = 1.0f;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug - Chunks", meta = (EditCondition = "bUseChunkedSystem"))
+	bool bShowChunkBorders = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug - Chunks", meta = (EditCondition = "bUseChunkedSystem"))
+	bool bShowChunkStates = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug - Chunks", meta = (EditCondition = "bUseChunkedSystem", ClampMin = "0.1", ClampMax = "5.0"))
+	float ChunkDebugUpdateInterval = 0.5f;
 
 	// Performance Monitoring
 	UFUNCTION(BlueprintCallable, Category = "Performance", meta = (CallInEditor = "true"))

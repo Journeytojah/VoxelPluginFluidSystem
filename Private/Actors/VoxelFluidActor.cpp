@@ -452,6 +452,23 @@ void AVoxelFluidActor::UpdateDebugVisualization()
 		DrawDebugGrid();
 	}
 	
+	// Update chunk debug visualization at specified intervals
+	if (bUseChunkedSystem && ChunkManager)
+	{
+		// Sync debug settings in case they changed
+		ChunkManager->bShowChunkBorders = bShowChunkBorders;
+		ChunkManager->bShowChunkStates = bShowChunkStates;
+		ChunkManager->DebugUpdateInterval = ChunkDebugUpdateInterval;
+		
+		if (ChunkManager->ShouldUpdateDebugVisualization())
+		{
+			if (UWorld* World = GetWorld())
+			{
+				ChunkManager->DrawDebugChunks(World);
+			}
+		}
+	}
+	
 	if (VoxelIntegration)
 	{
 		VoxelIntegration->bDebugDrawCells = bShowDebugGrid;
@@ -673,6 +690,11 @@ void AVoxelFluidActor::InitializeChunkedSystem()
 	ChunkManager->FlowRate = FluidFlowRate;
 	ChunkManager->Viscosity = FluidViscosity;
 	ChunkManager->Gravity = GravityStrength;
+	
+	// Sync debug settings
+	ChunkManager->bShowChunkBorders = bShowChunkBorders;
+	ChunkManager->bShowChunkStates = bShowChunkStates;
+	ChunkManager->DebugUpdateInterval = ChunkDebugUpdateInterval;
 	
 	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Chunked system initialized with %d chunk size"), ChunkSize);
 }

@@ -124,6 +124,9 @@ public:
 	void ForceUpdateChunkStates();
 	
 	void EnableChunkDebugVisualization(bool bEnable);
+	
+	void DrawDebugChunks(UWorld* World) const;
+	bool ShouldUpdateDebugVisualization() const;
 
 public:
 	FOnChunkLoaded OnChunkLoadedDelegate;
@@ -161,6 +164,9 @@ public:
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bDebugCrossChunkFlow = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug", meta = (ClampMin = "0.1", ClampMax = "5.0"))
+	float DebugUpdateInterval = 0.5f;
 
 protected:
 	UPROPERTY()
@@ -192,10 +198,13 @@ protected:
 	void ActivateChunk(UFluidChunk* Chunk);
 	void DeactivateChunk(UFluidChunk* Chunk);
 	
-	void DrawDebugChunks(UWorld* World) const;
-	
 	FChunkManagerStats CachedStats;
 	float StatsUpdateTimer = 0.0f;
+	
+	// Debug timing and tracking
+	float DebugUpdateTimer = 0.0f;
+	TMap<FFluidChunkCoord, float> ChunkLoadTimes;
+	TMap<FFluidChunkCoord, FString> ChunkStateHistory;
 	
 	FCriticalSection ChunkMapMutex;
 	

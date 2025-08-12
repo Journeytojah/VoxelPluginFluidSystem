@@ -93,6 +93,9 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 		SET_DWORD_STAT(STAT_VoxelFluid_ChunkUnloadQueueSize, CachedStats.ChunkUnloadQueueSize);
 		SET_FLOAT_STAT(STAT_VoxelFluid_AvgChunkUpdateTime, CachedStats.AverageChunkUpdateTime);
 	}
+	
+	// Update debug timer (debug drawing is now called externally)
+	DebugUpdateTimer += DeltaTime;
 }
 
 void UFluidChunkManager::UpdateSimulation(float DeltaTime)
@@ -870,6 +873,11 @@ void UFluidChunkManager::LoadChunk(const FFluidChunkCoord& Coord)
 	if (Chunk && Chunk->State == EChunkState::Unloaded)
 	{
 		Chunk->LoadChunk();
+		
+		// Track load time for debug
+		ChunkLoadTimes.Add(Coord, FPlatformTime::Seconds());
+		ChunkStateHistory.Add(Coord, FString::Printf(TEXT("Loaded at %.2fs"), FPlatformTime::Seconds()));
+		
 		OnChunkLoadedDelegate.Broadcast(Coord);
 	}
 }
@@ -887,6 +895,10 @@ void UFluidChunkManager::UnloadChunk(const FFluidChunkCoord& Coord)
 			ActiveChunkCoords.Remove(Coord);
 			InactiveChunkCoords.Remove(Coord);
 			BorderOnlyChunkCoords.Remove(Coord);
+			
+			// Track unload time for debug
+			ChunkStateHistory.Add(Coord, FString::Printf(TEXT("Unloaded at %.2fs"), FPlatformTime::Seconds()));
+			ChunkLoadTimes.Remove(Coord);
 			
 			LoadedChunks.Remove(Coord);
 			OnChunkUnloadedDelegate.Broadcast(Coord);
@@ -933,6 +945,9 @@ void UFluidChunkManager::ActivateChunk(UFluidChunk* Chunk)
 			}
 		}
 		
+		// Track activation for debug
+		ChunkStateHistory.Add(Coord, FString::Printf(TEXT("Activated at %.2fs"), FPlatformTime::Seconds()));
+		
 		// Notify that the chunk has been activated (for terrain refresh)
 		OnChunkLoadedDelegate.Broadcast(Coord);
 	}
@@ -950,6 +965,9 @@ void UFluidChunkManager::DeactivateChunk(UFluidChunk* Chunk)
 		Chunk->DeactivateChunk();
 		ActiveChunkCoords.Remove(Coord);
 		InactiveChunkCoords.Add(Coord);
+		
+		// Track deactivation for debug
+		ChunkStateHistory.Add(Coord, FString::Printf(TEXT("Deactivated at %.2fs"), FPlatformTime::Seconds()));
 	}
 }
 
@@ -958,36 +976,211 @@ void UFluidChunkManager::DrawDebugChunks(UWorld* World) const
 	if (!World || (!bShowChunkBorders && !bShowChunkStates))
 		return;
 	
+	const float CurrentTime = FPlatformTime::Seconds();
+	
+	// Get viewer positions to prioritize nearby chunks
+	TArray<FVector> ViewerPositions;
+	if (World->GetNetMode() == NM_Standalone)
+	{
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			if (APawn* Pawn = PC->GetPawn())
+			{
+				ViewerPositions.Add(Pawn->GetActorLocation());
+			}
+		}
+	}
+	
+	// Fallback to world center if no player found
+	if (ViewerPositions.Num() == 0)
+	{
+		ViewerPositions.Add(WorldOrigin);
+	}
+	
+	const FVector PrimaryViewerPos = ViewerPositions[0];
+	
+	// Draw summary stats at the top of the screen
+	if (bShowChunkStates)
+	{
+		const FString SummaryStats = FString::Printf(
+			TEXT("=== CHUNK SYSTEM DEBUG ===\n")
+			TEXT("Player Pos: [%.0f, %.0f, %.0f] | Viewing Range: %.0fm\n")
+			TEXT("Total Loaded: %d | Active: %d | Inactive: %d | Border: %d\n")
+			TEXT("Load Queue: %d | Unload Queue: %d | Update Interval: %.1fs\n")
+			TEXT("Avg Update Time: %.3fms | Cross-Chunk Flow: %s"),
+			PrimaryViewerPos.X, PrimaryViewerPos.Y, PrimaryViewerPos.Z,
+			StreamingConfig.LoadDistance,
+			LoadedChunks.Num(),
+			ActiveChunkCoords.Num(),
+			InactiveChunkCoords.Num(),
+			BorderOnlyChunkCoords.Num(),
+			CachedStats.ChunkLoadQueueSize,
+			CachedStats.ChunkUnloadQueueSize,
+			DebugUpdateInterval,
+			CachedStats.AverageChunkUpdateTime,
+			bDebugCrossChunkFlow ? TEXT("ON") : TEXT("OFF")
+		);
+		
+		DrawDebugString(World, FVector(50, 50, 0), SummaryStats, nullptr, FColor::Cyan, DebugUpdateInterval + 0.1f, true, 1.2f);
+	}
+	
+	// Create sorted list of chunks by distance to player
+	struct FChunkDistancePair
+	{
+		FFluidChunkCoord Coord;
+		UFluidChunk* Chunk;
+		float Distance;
+		
+		FChunkDistancePair(const FFluidChunkCoord& InCoord, UFluidChunk* InChunk, float InDistance)
+			: Coord(InCoord), Chunk(InChunk), Distance(InDistance) {}
+		
+		bool operator<(const FChunkDistancePair& Other) const
+		{
+			// Prioritize active chunks first, then sort by distance
+			if (Chunk->State == EChunkState::Active && Other.Chunk->State != EChunkState::Active)
+				return true;
+			if (Chunk->State != EChunkState::Active && Other.Chunk->State == EChunkState::Active)
+				return false;
+			return Distance < Other.Distance;
+		}
+	};
+	
+	TArray<FChunkDistancePair> SortedChunks;
 	for (const auto& Pair : LoadedChunks)
 	{
 		if (!Pair.Value)
 			continue;
 		
-		const FBox ChunkBounds = Pair.Value->GetWorldBounds();
-		FColor ChunkColor = FColor::White;
+		const float Distance = GetDistanceToChunk(Pair.Key, ViewerPositions);
+		SortedChunks.Emplace(Pair.Key, Pair.Value, Distance);
+	}
+	
+	// Sort chunks by priority (active first, then by distance)
+	SortedChunks.Sort();
+	
+	// Draw the closest/most important chunks first
+	int32 DebugIndex = 0;
+	const int32 MaxChunksToShow = 15; // Reduced to focus on nearby chunks
+	
+	for (const FChunkDistancePair& ChunkPair : SortedChunks)
+	{
+		if (DebugIndex >= MaxChunksToShow)
+			break;
 		
-		if (bShowChunkStates)
+		const UFluidChunk* Chunk = ChunkPair.Chunk;
+		const FFluidChunkCoord& Coord = ChunkPair.Coord;
+		const float Distance = ChunkPair.Distance;
+		const FBox ChunkBounds = Chunk->GetWorldBounds();
+		
+		FColor ChunkColor = FColor::White;
+		FString StateText = TEXT("Unknown");
+		
+		// Determine color and state text based on chunk state
+		switch (Chunk->State)
 		{
-			switch (Pair.Value->State)
-			{
-				case EChunkState::Active:
-					ChunkColor = FColor::Green;
-					break;
-				case EChunkState::Inactive:
-					ChunkColor = FColor::Yellow;
-					break;
-				case EChunkState::BorderOnly:
-					ChunkColor = FColor::Orange;
-					break;
-				default:
-					ChunkColor = FColor::Red;
-					break;
-			}
+			case EChunkState::Active:
+				ChunkColor = FColor::Green;
+				StateText = TEXT("ACTIVE");
+				break;
+			case EChunkState::Inactive:
+				ChunkColor = FColor::Yellow;
+				StateText = TEXT("INACTIVE");
+				break;
+			case EChunkState::BorderOnly:
+				ChunkColor = FColor::Orange;
+				StateText = TEXT("BORDER");
+				break;
+			case EChunkState::Loading:
+				ChunkColor = FColor::Blue;
+				StateText = TEXT("LOADING");
+				break;
+			case EChunkState::Unloading:
+				ChunkColor = FColor::Purple;
+				StateText = TEXT("UNLOADING");
+				break;
+			default:
+				ChunkColor = FColor::Red;
+				StateText = TEXT("ERROR");
+				break;
 		}
 		
+		// Draw chunk border
 		if (bShowChunkBorders)
 		{
-			DrawDebugBox(World, ChunkBounds.GetCenter(), ChunkBounds.GetExtent(), ChunkColor, false, -1.0f, 0, 2.0f);
+			// Make active chunks more prominent
+			const float BorderThickness = (Chunk->State == EChunkState::Active) ? 3.0f : 1.0f;
+			DrawDebugBox(World, ChunkBounds.GetCenter(), ChunkBounds.GetExtent(), ChunkColor, false, DebugUpdateInterval + 0.1f, 0, BorderThickness);
 		}
+		
+		// Draw detailed chunk information
+		if (bShowChunkStates)
+		{
+			// Calculate load time
+			float LoadTime = 0.0f;
+			if (const float* LoadTimePtr = ChunkLoadTimes.Find(Coord))
+			{
+				LoadTime = CurrentTime - *LoadTimePtr;
+			}
+			
+			// Get state history
+			FString StateHistory = TEXT("No History");
+			if (const FString* HistoryPtr = ChunkStateHistory.Find(Coord))
+			{
+				StateHistory = *HistoryPtr;
+			}
+			
+			// Build detailed info string with distance information
+			const FString ChunkInfo = FString::Printf(
+				TEXT("Chunk [%d,%d,%d] (%.0fm)\n")
+				TEXT("State: %s\n")
+				TEXT("LOD: %d | Cells: %d\n")
+				TEXT("Fluid: %.2f units\n")
+				TEXT("Load Time: %.1fs\n")
+				TEXT("%s"),
+				Coord.X, Coord.Y, Coord.Z, Distance,
+				*StateText,
+				Chunk->CurrentLOD,
+				Chunk->GetActiveCellCount(),
+				Chunk->GetTotalFluidVolume(),
+				LoadTime,
+				*StateHistory
+			);
+			
+			// Position text above chunk center, with larger text for active chunks
+			const FVector TextPosition = ChunkBounds.GetCenter() + FVector(0, 0, ChunkBounds.GetExtent().Z + 100);
+			const float TextSize = (Chunk->State == EChunkState::Active) ? 1.0f : 0.7f;
+			DrawDebugString(World, TextPosition, ChunkInfo, nullptr, ChunkColor, DebugUpdateInterval + 0.1f, true, TextSize);
+		}
+		
+		DebugIndex++;
 	}
+	
+	// Show overflow message if there are more chunks
+	if (SortedChunks.Num() > MaxChunksToShow && bShowChunkStates)
+	{
+		const FString OverflowMsg = FString::Printf(
+			TEXT("... and %d more chunks (showing closest %d)"),
+			SortedChunks.Num() - MaxChunksToShow,
+			MaxChunksToShow
+		);
+		DrawDebugString(World, FVector(50, 300, 0), OverflowMsg, nullptr, FColor::Yellow, DebugUpdateInterval + 0.1f, true, 1.0f);
+	}
+	
+	// Distance circles removed to avoid intrusive view obstruction
+	// The distance information is still shown in the text display above
+}
+
+bool UFluidChunkManager::ShouldUpdateDebugVisualization() const
+{
+	if (!bShowChunkBorders && !bShowChunkStates)
+		return false;
+	
+	if (DebugUpdateTimer >= DebugUpdateInterval)
+	{
+		// Reset timer (this is a bit hacky but works for our purpose)
+		const_cast<UFluidChunkManager*>(this)->DebugUpdateTimer = 0.0f;
+		return true;
+	}
+	
+	return false;
 }
