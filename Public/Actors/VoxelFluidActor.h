@@ -62,10 +62,8 @@ public:
 	void TestFluidSpawn();
 
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid", meta = (CallInEditor = "true"))
-	void UpdateBounds();
+	void UpdateSimulationBounds();
 
-	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
-	void UpdateGridOriginForMovement();
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UBoxComponent* BoundsComponent;
@@ -85,81 +83,55 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Settings")
 	AActor* TargetVoxelWorld;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
 	bool bAutoStart = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Settings")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Simulation")
 	bool bIsSimulating = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
 	float SimulationSpeed = 1.0f;
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Settings", meta = (ClampMin = "0.001", ClampMax = "0.1"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation", meta = (ClampMin = "0.001", ClampMax = "0.1"))
 	float SimulationTimestep = 0.016f;
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
 	bool bUseFixedTimestep = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid Settings")
-	int32 GridSizeX = 128;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid Settings")
-	int32 GridSizeY = 128;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid Settings")
-	int32 GridSizeZ = 32;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
+	int32 ChunkSize = 32;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
 	float CellSize = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
-	bool bUseChunkedSystem = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
-	int32 ChunkSize = 32;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
 	float ChunkLoadDistance = 8000.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
 	float ChunkActiveDistance = 5000.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
 	int32 MaxActiveChunks = 64;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
 	int32 MaxLoadedChunks = 128;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
-	bool bUseAsyncChunkLoading = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
 	float LOD1Distance = 2000.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (EditCondition = "bUseChunkedSystem"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
 	float LOD2Distance = 4000.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bounds Settings", meta = (CallInEditor = "true"))
-	FVector BoundsExtent = FVector(6400.0f, 6400.0f, 1600.0f);
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Bounds", meta = (CallInEditor = "true"))
+	FVector SimulationBoundsExtent = FVector(6400.0f, 6400.0f, 1600.0f);
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bounds Settings")
-	FVector BoundsOffset = FVector::ZeroVector;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bounds Settings")
-	bool bUseWorldBounds = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bounds Settings", meta = (EditCondition = "bUseWorldBounds"))
-	FVector WorldBoundsMin = FVector(-5000.0f, -5000.0f, -1000.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bounds Settings", meta = (EditCondition = "bUseWorldBounds"))
-	FVector WorldBoundsMax = FVector(5000.0f, 5000.0f, 2000.0f);
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Bounds")
+	FVector SimulationBoundsOffset = FVector::ZeroVector;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties")
 	float FluidViscosity = 0.1f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties")
-	float FluidFlowRate = 0.5f;
-	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.0", ClampMax = "10.0"))
 	float DefaultSourceFlowRate = 1.0f;
 
@@ -181,8 +153,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.0", ClampMax = "2.0"))
 	float FluidDensityMultiplier = 1.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
-	bool bShowDebugGrid = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bShowFlowVectors = false;
@@ -190,13 +160,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	float DebugFluidSpawnAmount = 1.0f;
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug - Chunks", meta = (EditCondition = "bUseChunkedSystem"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug - Chunks")
 	bool bShowChunkBorders = false;
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug - Chunks", meta = (EditCondition = "bUseChunkedSystem"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug - Chunks")
 	bool bShowChunkStates = false;
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug - Chunks", meta = (EditCondition = "bUseChunkedSystem", ClampMin = "0.1", ClampMax = "5.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug - Chunks", meta = (ClampMin = "0.1", ClampMax = "5.0"))
 	float ChunkDebugUpdateInterval = 0.5f;
 
 	// Performance Monitoring
@@ -232,14 +202,13 @@ private:
 	
 	void UpdateFluidSources(float DeltaTime);
 	void UpdateDebugVisualization();
-	void DrawDebugGrid();
-	void CalculateGridBounds();
-	void InitializeChunkedSystem();
-	void UpdateChunkedSystem(float DeltaTime);
+	void DrawDebugChunks();
+	void InitializeChunkSystem();
+	void UpdateChunkSystem(float DeltaTime);
 	TArray<FVector> GetViewerPositions() const;
 
-	FVector CalculatedGridOrigin;
-	FVector CalculatedBoundsExtent;
+	FVector SimulationOrigin;
+	FVector ActiveBoundsExtent;
 	
 	// Performance tracking
 	float LastFrameSimulationTime = 0.0f;

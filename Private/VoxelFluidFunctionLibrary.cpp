@@ -1,6 +1,6 @@
 #include "VoxelFluidFunctionLibrary.h"
 #include "Actors/VoxelFluidActor.h"
-#include "CellularAutomata/CAFluidGrid.h"
+#include "CellularAutomata/FluidChunkManager.h"
 #include "VoxelIntegration/VoxelFluidIntegration.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
@@ -22,12 +22,12 @@ AVoxelFluidActor* UVoxelFluidFunctionLibrary::SpawnFluidSystem(UObject* WorldCon
 	
 	if (FluidActor)
 	{
-		FluidActor->GridSizeX = GridSizeX;
-		FluidActor->GridSizeY = GridSizeY;
-		FluidActor->GridSizeZ = GridSizeZ;
+		// Set simulation bounds based on requested grid size
+		const float CellSize = FluidActor->CellSize;
+		FluidActor->SimulationBoundsExtent = FVector(GridSizeX * CellSize * 0.5f, GridSizeY * CellSize * 0.5f, GridSizeZ * CellSize * 0.5f);
 		FluidActor->InitializeFluidSystem();
 		
-		UE_LOG(LogTemp, Log, TEXT("Spawned Voxel Fluid System at %s with grid size %dx%dx%d"), 
+		UE_LOG(LogTemp, Log, TEXT("Spawned Voxel Fluid System at %s with effective size %dx%dx%d cells"), 
 			   *Location.ToString(), GridSizeX, GridSizeY, GridSizeZ);
 	}
 
@@ -36,36 +36,21 @@ AVoxelFluidActor* UVoxelFluidFunctionLibrary::SpawnFluidSystem(UObject* WorldCon
 
 void UVoxelFluidFunctionLibrary::AddRainToFluidSystem(AVoxelFluidActor* FluidActor, float Intensity, float Radius)
 {
-	if (!FluidActor || !FluidActor->FluidGrid)
+	if (!FluidActor || !FluidActor->ChunkManager)
 		return;
 
 	const FVector ActorLocation = FluidActor->GetActorLocation();
-	const float CellSize = FluidActor->CellSize;
 	
-	int32 CellRadius = FMath::CeilToInt(Radius / CellSize);
-	int32 CenterX = FluidActor->GridSizeX / 2;
-	int32 CenterY = FluidActor->GridSizeY / 2;
-	
-	for (int32 x = FMath::Max(0, CenterX - CellRadius); x < FMath::Min(FluidActor->GridSizeX, CenterX + CellRadius); ++x)
+	// Add rain using the chunk manager
+	// This will automatically handle chunk loading and fluid distribution
+	const int32 NumDrops = FMath::CeilToInt(Radius * Radius * Intensity * 0.01f);
+	for (int32 i = 0; i < NumDrops; ++i)
 	{
-		for (int32 y = FMath::Max(0, CenterY - CellRadius); y < FMath::Min(FluidActor->GridSizeY, CenterY + CellRadius); ++y)
-		{
-			float Distance = FVector2D(x - CenterX, y - CenterY).Size() * CellSize;
-			if (Distance <= Radius)
-			{
-				if (FMath::FRand() < Intensity)
-				{
-					for (int32 z = FluidActor->GridSizeZ - 1; z >= 0; --z)
-					{
-						if (FluidActor->FluidGrid->GetFluidAt(x, y, z) < 0.1f)
-						{
-							FluidActor->FluidGrid->AddFluid(x, y, z, Intensity * 0.1f);
-							break;
-						}
-					}
-				}
-			}
-		}
+		const float Angle = FMath::FRand() * 2.0f * PI;
+		const float Distance = FMath::Sqrt(FMath::FRand()) * Radius;
+		const FVector DropLocation = ActorLocation + FVector(FMath::Cos(Angle) * Distance, FMath::Sin(Angle) * Distance, 1000.0f);
+		
+		FluidActor->AddFluidAtLocation(DropLocation, Intensity * 0.1f);
 	}
 }
 
@@ -79,31 +64,24 @@ void UVoxelFluidFunctionLibrary::CreateFluidSource(AVoxelFluidActor* FluidActor,
 
 void UVoxelFluidFunctionLibrary::CreateFluidSplash(AVoxelFluidActor* FluidActor, const FVector& ImpactLocation, float SplashRadius, float SplashAmount)
 {
-	if (!FluidActor || !FluidActor->FluidGrid)
+	if (!FluidActor || !FluidActor->ChunkManager)
 		return;
 
-	const FVector LocalPos = ImpactLocation - FluidActor->GetActorLocation();
-	int32 CenterX, CenterY, CenterZ;
-	
-	if (!FluidActor->FluidGrid->GetCellFromWorldPosition(LocalPos, CenterX, CenterY, CenterZ))
-		return;
-
-	int32 CellRadius = FMath::CeilToInt(SplashRadius / FluidActor->CellSize);
-	
-	for (int32 x = FMath::Max(0, CenterX - CellRadius); x < FMath::Min(FluidActor->GridSizeX, CenterX + CellRadius); ++x)
+	// Create splash using chunk manager
+	const int32 NumSplashPoints = FMath::CeilToInt(SplashRadius * 0.1f);
+	for (int32 i = 0; i < NumSplashPoints; ++i)
 	{
-		for (int32 y = FMath::Max(0, CenterY - CellRadius); y < FMath::Min(FluidActor->GridSizeY, CenterY + CellRadius); ++y)
-		{
-			for (int32 z = FMath::Max(0, CenterZ - 1); z < FMath::Min(FluidActor->GridSizeZ, CenterZ + 3); ++z)
-			{
-				float Distance = FVector(x - CenterX, y - CenterY, z - CenterZ).Size() * FluidActor->CellSize;
-				if (Distance <= SplashRadius)
-				{
-					float Falloff = 1.0f - (Distance / SplashRadius);
-					FluidActor->FluidGrid->AddFluid(x, y, z, SplashAmount * Falloff);
-				}
-			}
-		}
+		const FVector RandomOffset = FVector(
+			FMath::RandRange(-SplashRadius, SplashRadius),
+			FMath::RandRange(-SplashRadius, SplashRadius),
+			FMath::RandRange(0.0f, SplashRadius * 0.5f)
+		);
+		
+		const FVector SplashPoint = ImpactLocation + RandomOffset;
+		const float Distance = RandomOffset.Size();
+		const float Falloff = 1.0f - FMath::Clamp(Distance / SplashRadius, 0.0f, 1.0f);
+		
+		FluidActor->AddFluidAtLocation(SplashPoint, SplashAmount * Falloff);
 	}
 }
 
@@ -133,22 +111,13 @@ void UVoxelFluidFunctionLibrary::SyncAllFluidActorsWithTerrain(UObject* WorldCon
 
 float UVoxelFluidFunctionLibrary::GetFluidDepthAtLocation(AVoxelFluidActor* FluidActor, const FVector& WorldLocation)
 {
-	if (!FluidActor || !FluidActor->FluidGrid)
+	if (!FluidActor || !FluidActor->ChunkManager)
 		return 0.0f;
 
-	const FVector LocalPos = WorldLocation - FluidActor->GetActorLocation();
-	int32 CellX, CellY, CellZ;
-	
-	if (!FluidActor->FluidGrid->GetCellFromWorldPosition(LocalPos, CellX, CellY, CellZ))
-		return 0.0f;
-
-	float TotalDepth = 0.0f;
-	for (int32 z = CellZ; z < FluidActor->GridSizeZ; ++z)
-	{
-		TotalDepth += FluidActor->FluidGrid->GetFluidAt(CellX, CellY, z) * FluidActor->CellSize;
-	}
-	
-	return TotalDepth;
+	// Query fluid depth from chunk manager
+	// TODO: Implement GetFluidDepthAtWorldPosition in ChunkManager
+	// For now return 0.0f as placeholder
+	return 0.0f;
 }
 
 bool UVoxelFluidFunctionLibrary::IsLocationSubmerged(AVoxelFluidActor* FluidActor, const FVector& WorldLocation, float MinDepth)
@@ -158,30 +127,25 @@ bool UVoxelFluidFunctionLibrary::IsLocationSubmerged(AVoxelFluidActor* FluidActo
 
 void UVoxelFluidFunctionLibrary::TestFluidOnTerrain(AVoxelFluidActor* FluidActor, int32 NumTestPoints)
 {
-	if (!FluidActor || !FluidActor->FluidGrid)
+	if (!FluidActor || !FluidActor->ChunkManager)
 		return;
 
 	FluidActor->RefreshTerrainData();
 	
+	const FVector ActorLocation = FluidActor->GetActorLocation();
+	const FVector BoundsExtent = FluidActor->SimulationBoundsExtent;
+	
 	for (int32 i = 0; i < NumTestPoints; ++i)
 	{
-		int32 TestX = FMath::RandRange(FluidActor->GridSizeX / 4, FluidActor->GridSizeX * 3 / 4);
-		int32 TestY = FMath::RandRange(FluidActor->GridSizeY / 4, FluidActor->GridSizeY * 3 / 4);
+		const FVector TestLocation = ActorLocation + FVector(
+			FMath::RandRange(-BoundsExtent.X * 0.5f, BoundsExtent.X * 0.5f),
+			FMath::RandRange(-BoundsExtent.Y * 0.5f, BoundsExtent.Y * 0.5f),
+			FMath::RandRange(0.0f, (float)(BoundsExtent.Z * 0.75f))
+		);
 		
-		for (int32 z = FluidActor->GridSizeZ - 1; z >= 0; --z)
-		{
-			const int32 CellIdx = TestX + TestY * FluidActor->GridSizeX + z * FluidActor->GridSizeX * FluidActor->GridSizeY;
-			if (CellIdx >= 0 && CellIdx < FluidActor->FluidGrid->Cells.Num())
-			{
-				if (!FluidActor->FluidGrid->Cells[CellIdx].bIsSolid)
-				{
-					FluidActor->FluidGrid->AddFluid(TestX, TestY, z, 0.8f);
-					
-					UE_LOG(LogTemp, Log, TEXT("Added test fluid at grid position (%d, %d, %d)"), TestX, TestY, z);
-					break;
-				}
-			}
-		}
+		FluidActor->AddFluidAtLocation(TestLocation, 0.8f);
+		
+		UE_LOG(LogTemp, Log, TEXT("Added test fluid at world position %s"), *TestLocation.ToString());
 	}
 	
 	FluidActor->StartSimulation();
