@@ -42,6 +42,8 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid Visualization")
 	void UpdateVisualization();
+	
+	void OnChunkUnloaded(const struct FFluidChunkCoord& ChunkCoord);
 
 	UFUNCTION(BlueprintCallable, Category = "Fluid Visualization")
 	void GenerateInstancedVisualization();

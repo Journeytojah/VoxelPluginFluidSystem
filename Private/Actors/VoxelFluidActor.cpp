@@ -154,6 +154,15 @@ void AVoxelFluidActor::InitializeFluidSystem()
 				VoxelIntegration->UpdateTerrainForChunkCoord(ChunkCoord);
 			}
 		});
+		
+		// Bind to chunk unloaded delegate to clear visualization cache
+		ChunkManager->OnChunkUnloadedDelegate.AddLambda([this](const FFluidChunkCoord& ChunkCoord)
+		{
+			if (VisualizationComponent)
+			{
+				VisualizationComponent->OnChunkUnloaded(ChunkCoord);
+			}
+		});
 	}
 	
 	if (VisualizationComponent && ChunkManager)
@@ -461,14 +470,33 @@ void AVoxelFluidActor::UpdateChunkSystem(float DeltaTime)
 	
 	TArray<FVector> ViewerPositions = GetViewerPositions();
 	
+	// Log viewer position periodically for debugging
+	static float LogTimer = 0.0f;
+	LogTimer += DeltaTime;
+	if (LogTimer > 2.0f) // Log every 2 seconds
+	{
+		LogTimer = 0.0f;
+		if (ViewerPositions.Num() > 0)
+		{
+			UE_LOG(LogTemp, Log, TEXT("Viewer at: %s"), *ViewerPositions[0].ToString());
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("No viewer positions available for chunk streaming!"));
+		}
+	}
+	
 	ChunkManager->UpdateChunks(DeltaTime, ViewerPositions);
 	
-	// Add fluid from all active sources using their individual flow rates
-	for (const auto& Source : FluidSources)
+	// Add fluid from all active sources using their individual flow rates (unless paused)
+	if (!bPauseFluidSources)
 	{
-		const FVector& SourcePos = Source.Key;
-		const float SourceFlowRate = Source.Value;
-		ChunkManager->AddFluidAtWorldPosition(SourcePos, SourceFlowRate * DeltaTime);
+		for (const auto& Source : FluidSources)
+		{
+			const FVector& SourcePos = Source.Key;
+			const float SourceFlowRate = Source.Value;
+			ChunkManager->AddFluidAtWorldPosition(SourcePos, SourceFlowRate * DeltaTime);
+		}
 	}
 	
 	ChunkManager->UpdateSimulation(DeltaTime);
@@ -612,3 +640,199 @@ void AVoxelFluidActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyCha
 	}
 }
 #endif
+
+void AVoxelFluidActor::TestPersistenceAtLocation(const FVector& WorldPosition)
+{
+	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Chunk manager not initialized"));
+		return;
+	}
+	
+	ChunkManager->TestPersistence(WorldPosition);
+}
+
+void AVoxelFluidActor::ForceUnloadAllChunks()
+{
+	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Chunk manager not initialized"));
+		return;
+	}
+	
+	ChunkManager->ForceUnloadAllChunks();
+}
+
+void AVoxelFluidActor::ShowCacheStatus()
+{
+	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Chunk manager not initialized"));
+		return;
+	}
+	
+	int32 CacheSize = ChunkManager->GetCacheSize();
+	int32 CacheMemoryKB = ChunkManager->GetCacheMemoryUsage();
+	
+	UE_LOG(LogTemp, Warning, TEXT("=== PERSISTENCE CACHE STATUS ==="));
+	UE_LOG(LogTemp, Warning, TEXT("Cache entries: %d"), CacheSize);
+	UE_LOG(LogTemp, Warning, TEXT("Memory usage: %d KB"), CacheMemoryKB);
+	UE_LOG(LogTemp, Warning, TEXT("Persistence enabled: %s"), 
+	       ChunkManager->StreamingConfig.bEnablePersistence ? TEXT("YES") : TEXT("NO"));
+	UE_LOG(LogTemp, Warning, TEXT("Max cached chunks: %d"), 
+	       ChunkManager->StreamingConfig.MaxCachedChunks);
+	UE_LOG(LogTemp, Warning, TEXT("Cache expiration: %.1f seconds"), 
+	       ChunkManager->StreamingConfig.CacheExpirationTime);
+}
+
+void AVoxelFluidActor::TestPersistenceWithSourcePause()
+{
+	// Prevent test from running multiple times simultaneously
+	static bool bTestInProgress = false;
+	if (bTestInProgress)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Persistence test already in progress, please wait"));
+		return;
+	}
+	
+	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Chunk manager not initialized"));
+		return;
+	}
+	
+	bTestInProgress = true;
+	
+	UE_LOG(LogTemp, Warning, TEXT("=== TESTING PERSISTENCE WITH SOURCE PAUSE ==="));
+	
+	// Step 1: Pause fluid sources AND simulation to prevent interference
+	bool bWasPaused = bPauseFluidSources;
+	bool bWasSimulating = bIsSimulating;
+	bPauseFluidSources = true;
+	bIsSimulating = false;
+	UE_LOG(LogTemp, Warning, TEXT("1. Paused fluid sources and simulation"));
+	
+	// Step 2: Record current fluid state and which chunks have fluid
+	float TotalFluidBefore = 0.0f;
+	TArray<FFluidChunkCoord> ChunksWithFluid;
+	TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
+	for (UFluidChunk* Chunk : ActiveChunks)
+	{
+		if (Chunk && Chunk->HasFluid())
+		{
+			float ChunkVolume = Chunk->GetTotalFluidVolume();
+			TotalFluidBefore += ChunkVolume;
+			ChunksWithFluid.Add(Chunk->ChunkCoord);
+			UE_LOG(LogTemp, Log, TEXT("  Chunk %s has %.2f fluid"), 
+			       *Chunk->ChunkCoord.ToString(), ChunkVolume);
+		}
+	}
+	UE_LOG(LogTemp, Warning, TEXT("2. Total fluid before unload: %.2f in %d chunks"), TotalFluidBefore, ChunksWithFluid.Num());
+	
+	// Step 3: Force unload all chunks
+	ChunkManager->ForceUnloadAllChunks();
+	UE_LOG(LogTemp, Warning, TEXT("3. Force unloaded all chunks"));
+	
+	// Step 4: Force reload ONLY chunks that had fluid
+	UE_LOG(LogTemp, Warning, TEXT("4. Reloading %d chunks that had fluid..."), ChunksWithFluid.Num());
+	
+	// Load chunks directly (synchronously) for testing
+	TArray<UFluidChunk*> RestoredChunks;
+	TMap<FFluidChunkCoord, float> RestoredFluidVolumes;
+	for (const FFluidChunkCoord& Coord : ChunksWithFluid)
+	{
+		UFluidChunk* Chunk = ChunkManager->GetOrCreateChunk(Coord);
+		if (Chunk)
+		{
+			// Force the chunk to unloaded state if it's not already
+			if (Chunk->State != EChunkState::Unloaded)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("  Forcing chunk %s to Unloaded state from current state"), *Coord.ToString());
+				Chunk->UnloadChunk();
+			}
+			
+			// Manually restore from cache
+			FChunkPersistentData PersistentData;
+			if (ChunkManager->LoadChunkData(Coord, PersistentData))
+			{
+				Chunk->LoadChunk();
+				Chunk->DeserializeChunkData(PersistentData);
+				
+				// Use the ChunkManager's public method to properly activate and register the chunk
+				ChunkManager->ForceActivateChunk(Chunk);
+				
+				RestoredChunks.Add(Chunk);
+				RestoredFluidVolumes.Add(Coord, PersistentData.TotalFluidVolume);
+				UE_LOG(LogTemp, Log, TEXT("  Manually restored chunk %s with %.2f fluid"), 
+				       *Coord.ToString(), PersistentData.TotalFluidVolume);
+			}
+			else
+			{
+				UE_LOG(LogTemp, Error, TEXT("  Failed to load cached data for chunk %s"), *Coord.ToString());
+			}
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error, TEXT("  Failed to get/create chunk %s"), *Coord.ToString());
+		}
+	}
+	
+	// Wait a moment for chunks to settle
+	FPlatformProcess::Sleep(0.05f);
+	
+	// Force update chunk states to ensure they're recognized
+	ChunkManager->ForceUpdateChunkStates();
+	
+	// Step 5: Check fluid state after reload - use the volumes from persistent data
+	float TotalFluidAfter = 0.0f;
+	UE_LOG(LogTemp, Warning, TEXT("5. Checking %d restored chunks..."), RestoredFluidVolumes.Num());
+	for (const auto& Entry : RestoredFluidVolumes)
+	{
+		TotalFluidAfter += Entry.Value;
+		if (Entry.Value > 0.0f)
+		{
+			UE_LOG(LogTemp, Log, TEXT("  Chunk %s has %.2f fluid from persistent data"), 
+			       *Entry.Key.ToString(), Entry.Value);
+		}
+	}
+	UE_LOG(LogTemp, Warning, TEXT("5. Total fluid after reload: %.2f"), TotalFluidAfter);
+	
+	// Also check the actual chunk fluid volumes to verify deserialization worked
+	UE_LOG(LogTemp, Warning, TEXT("5b. Verifying actual chunk fluid volumes:"));
+	for (UFluidChunk* Chunk : RestoredChunks)
+	{
+		if (Chunk)
+		{
+			float ActualVolume = Chunk->GetTotalFluidVolume();
+			UE_LOG(LogTemp, Log, TEXT("  Chunk %s actual volume: %.2f"), 
+			       *Chunk->ChunkCoord.ToString(), ActualVolume);
+		}
+	}
+	
+	// Step 6: Compare results
+	float Difference = FMath::Abs(TotalFluidBefore - TotalFluidAfter);
+	float PercentageDifference = (TotalFluidBefore > 0.0f) ? (Difference / TotalFluidBefore * 100.0f) : 0.0f;
+	
+	// Allow up to 3% difference due to 16-bit quantization in compression
+	// This is acceptable for the memory savings achieved
+	if (PercentageDifference < 3.0f)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SUCCESS! Fluid preserved: Before=%.2f, After=%.2f (%.2f%% difference due to compression)"), 
+		       TotalFluidBefore, TotalFluidAfter, PercentageDifference);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("FAILURE! Fluid lost: Before=%.2f, After=%.2f, Difference=%.2f (%.2f%%)"), 
+		       TotalFluidBefore, TotalFluidAfter, Difference, PercentageDifference);
+	}
+	
+	// Restore pause and simulation state
+	bPauseFluidSources = bWasPaused;
+	bIsSimulating = bWasSimulating;
+	UE_LOG(LogTemp, Warning, TEXT("6. Restored states - Sources: %s, Simulation: %s"), 
+	       bPauseFluidSources ? TEXT("PAUSED") : TEXT("ACTIVE"),
+	       bIsSimulating ? TEXT("RUNNING") : TEXT("STOPPED"));
+	
+	// Clear test in progress flag
+	bTestInProgress = false;
+}

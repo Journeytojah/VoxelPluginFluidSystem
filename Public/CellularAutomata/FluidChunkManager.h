@@ -42,6 +42,15 @@ struct VOXELFLUIDSYSTEM_API FChunkStreamingConfig
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
 	int32 MaxChunksToProcessPerFrame = 8;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Persistence")
+	bool bEnablePersistence = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Persistence")
+	int32 MaxCachedChunks = 256;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Persistence")
+	float CacheExpirationTime = 300.0f; // 5 minutes
 };
 
 USTRUCT(BlueprintType)
@@ -128,6 +137,29 @@ public:
 	
 	void DrawDebugChunks(UWorld* World) const;
 	bool ShouldUpdateDebugVisualization() const;
+	
+	// Persistence methods
+	void SaveChunkData(const FFluidChunkCoord& Coord, const FChunkPersistentData& Data);
+	bool LoadChunkData(const FFluidChunkCoord& Coord, FChunkPersistentData& OutData);
+	void ClearChunkCache();
+	void PruneExpiredCache();
+	int32 GetCacheMemoryUsage() const;
+	int32 GetCacheSize() const;
+	void SaveCacheToDisk();
+	void LoadCacheFromDisk();
+	
+	// Debug methods
+	UFUNCTION(BlueprintCallable, Category = "Debug")
+	void TestPersistence(const FVector& WorldPos);
+	
+	UFUNCTION(BlueprintCallable, Category = "Debug") 
+	void ForceUnloadAllChunks();
+	
+	// Public method to activate a chunk for testing/restoration
+	void ForceActivateChunk(UFluidChunk* Chunk);
+	
+	// Check if chunk operations are in progress
+	bool IsProcessingChunkOperations() const { return bFreezeFluidForChunkOps; }
 
 public:
 	FOnChunkLoaded OnChunkLoadedDelegate;
@@ -170,12 +202,37 @@ public:
 	float DebugUpdateInterval = 0.5f;
 
 protected:
+	// Chunk cache entry
+	struct FCachedChunkEntry
+	{
+		FChunkPersistentData Data;
+		float CacheTime;
+		int32 AccessCount;
+		
+		FCachedChunkEntry()
+		{
+			CacheTime = 0.0f;
+			AccessCount = 0;
+		}
+	};
+	
 	UPROPERTY()
 	TMap<FFluidChunkCoord, UFluidChunk*> LoadedChunks;
 	
 	TSet<FFluidChunkCoord> ActiveChunkCoords;
 	TSet<FFluidChunkCoord> InactiveChunkCoords;
 	TSet<FFluidChunkCoord> BorderOnlyChunkCoords;
+	
+	// Persistence cache
+	TMap<FFluidChunkCoord, FCachedChunkEntry> ChunkCache;
+	mutable FCriticalSection CacheMutex;
+	
+	// Track last save time to prevent too frequent saves
+	TMap<FFluidChunkCoord, float> ChunkLastSaveTime;
+	
+	// Fluid freeze state for chunk operations
+	bool bFreezeFluidForChunkOps = false;
+	float ChunkOpsFreezeTimer = 0.0f;
 	
 	TQueue<FFluidChunkCoord> ChunkLoadQueue;
 	TQueue<FFluidChunkCoord> ChunkUnloadQueue;

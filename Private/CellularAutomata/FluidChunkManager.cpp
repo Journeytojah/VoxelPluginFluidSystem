@@ -59,6 +59,9 @@ void UFluidChunkManager::Initialize(int32 InChunkSize, float InCellSize, const F
 	
 	UE_LOG(LogTemp, Log, TEXT("FluidChunkManager: Initialized with chunk size %d, cell size %.1f"), 
 		   ChunkSize, CellSize);
+	UE_LOG(LogTemp, Warning, TEXT("PERSISTENCE: %s (Max cache: %d chunks, Expiration: %.1f seconds)"),
+	       StreamingConfig.bEnablePersistence ? TEXT("ENABLED") : TEXT("DISABLED"),
+	       StreamingConfig.MaxCachedChunks, StreamingConfig.CacheExpirationTime);
 }
 
 void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& ViewerPositions)
@@ -76,8 +79,17 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 		UpdateChunkStates(ViewerPositions);
 		UpdateChunkLODs(ViewerPositions);
 		
+		int32 LoadQueueBefore = ChunkLoadQueue.IsEmpty() ? 0 : 1;
+		int32 UnloadQueueBefore = ChunkUnloadQueue.IsEmpty() ? 0 : 1;
+		
 		ProcessChunkLoadQueue();
 		ProcessChunkUnloadQueue();
+		
+		if (LoadQueueBefore > 0 || UnloadQueueBefore > 0)
+		{
+			UE_LOG(LogTemp, Log, TEXT("Chunk Streaming: Processed %d loads, %d unloads. Cache has %d entries (%d KB)"),
+			       LoadQueueBefore, UnloadQueueBefore, GetCacheSize(), GetCacheMemoryUsage());
+		}
 	}
 	
 	StatsUpdateTimer += DeltaTime;
@@ -159,6 +171,18 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 {
 	if (!bIsInitialized || !IsValidLowLevel())
 		return;
+	
+	// Skip fluid simulation if we're in the middle of chunk operations
+	if (bFreezeFluidForChunkOps)
+	{
+		ChunkOpsFreezeTimer -= DeltaTime;
+		if (ChunkOpsFreezeTimer <= 0.0f)
+		{
+			bFreezeFluidForChunkOps = false;
+			UE_LOG(LogTemp, Log, TEXT("Fluid simulation resumed after chunk operations"));
+		}
+		return; // Don't update fluid while frozen
+	}
 	
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_UpdateSimulation);
 	
@@ -563,11 +587,27 @@ void UFluidChunkManager::ProcessChunkLoadQueue()
 	
 	int32 ProcessedCount = 0;
 	FFluidChunkCoord Coord;
+	bool bProcessedAny = false;
 	
 	while (ProcessedCount < StreamingConfig.MaxChunksToProcessPerFrame && ChunkLoadQueue.Dequeue(Coord))
 	{
+		// Freeze fluid for a moment when loading chunks to ensure consistent state
+		if (!bFreezeFluidForChunkOps)
+		{
+			bFreezeFluidForChunkOps = true;
+			ChunkOpsFreezeTimer = 0.1f; // Freeze for 100ms
+			UE_LOG(LogTemp, Log, TEXT("Freezing fluid simulation for chunk load operations"));
+		}
+		
 		LoadChunk(Coord);
 		ProcessedCount++;
+		bProcessedAny = true;
+	}
+	
+	// Extend freeze timer if we processed chunks
+	if (bProcessedAny && bFreezeFluidForChunkOps)
+	{
+		ChunkOpsFreezeTimer = FMath::Max(ChunkOpsFreezeTimer, 0.1f);
 	}
 }
 
@@ -577,11 +617,27 @@ void UFluidChunkManager::ProcessChunkUnloadQueue()
 	
 	int32 ProcessedCount = 0;
 	FFluidChunkCoord Coord;
+	bool bProcessedAny = false;
 	
 	while (ProcessedCount < StreamingConfig.MaxChunksToProcessPerFrame && ChunkUnloadQueue.Dequeue(Coord))
 	{
+		// Freeze fluid for a moment when unloading chunks to save consistent state
+		if (!bFreezeFluidForChunkOps)
+		{
+			bFreezeFluidForChunkOps = true;
+			ChunkOpsFreezeTimer = 0.1f; // Freeze for 100ms
+			UE_LOG(LogTemp, Log, TEXT("Freezing fluid simulation for chunk unload operations"));
+		}
+		
 		UnloadChunk(Coord);
 		ProcessedCount++;
+		bProcessedAny = true;
+	}
+	
+	// Extend freeze timer if we processed chunks
+	if (bProcessedAny && bFreezeFluidForChunkOps)
+	{
+		ChunkOpsFreezeTimer = FMath::Max(ChunkOpsFreezeTimer, 0.1f);
 	}
 }
 
@@ -632,14 +688,39 @@ void UFluidChunkManager::UpdateChunkStates(const TArray<FVector>& ViewerPosition
 		}
 	}
 	
+	// Log detailed chunk state periodically
+	static float ChunkStateLogTimer = 0.0f;
+	ChunkStateLogTimer += 0.1f; // Approximation since we're called every 0.1s
+	bool bShouldLogDetails = (ChunkStateLogTimer > 5.0f); // Log every 5 seconds
+	if (bShouldLogDetails)
+	{
+		ChunkStateLogTimer = 0.0f;
+		UE_LOG(LogTemp, Log, TEXT("=== Chunk State Update ==="));
+		UE_LOG(LogTemp, Log, TEXT("Loaded chunks: %d, Active: %d, Inactive: %d"),
+		       LoadedChunks.Num(), ActiveChunkCoords.Num(), InactiveChunkCoords.Num());
+		UE_LOG(LogTemp, Log, TEXT("Streaming distances - Active: %.0f, Load: %.0f, Unload: %.0f"),
+		       StreamingConfig.ActiveDistance, StreamingConfig.LoadDistance, StreamingConfig.UnloadDistance);
+	}
+	
 	for (const auto& Pair : LoadedChunks)
 	{
 		const FFluidChunkCoord& Coord = Pair.Key;
 		const float Distance = GetDistanceToChunk(Coord, ViewerPositions);
 		
+		if (bShouldLogDetails && Pair.Value && Pair.Value->HasFluid())
+		{
+			UE_LOG(LogTemp, Log, TEXT("  Chunk %s: Distance=%.0f, FluidVol=%.1f"),
+			       *Coord.ToString(), Distance, Pair.Value->GetTotalFluidVolume());
+		}
+		
 		if (Distance > StreamingConfig.UnloadDistance)
 		{
 			ChunksToUnload.Add(Coord);
+			if (bShouldLogDetails)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("  -> Marked chunk %s for UNLOAD (distance %.0f > %.0f)"),
+				       *Coord.ToString(), Distance, StreamingConfig.UnloadDistance);
+			}
 		}
 		else if (Distance > StreamingConfig.ActiveDistance && ActiveChunkCoords.Contains(Coord))
 		{
@@ -655,6 +736,7 @@ void UFluidChunkManager::UpdateChunkStates(const TArray<FVector>& ViewerPosition
 	for (const FFluidChunkCoord& Coord : ChunksToUnload)
 	{
 		RequestChunkUnload(Coord);
+		UE_LOG(LogTemp, Warning, TEXT("Requesting unload of chunk %s"), *Coord.ToString());
 	}
 	
 	for (const FFluidChunkCoord& Coord : ChunksToActivate)
@@ -1066,6 +1148,24 @@ void UFluidChunkManager::LoadChunk(const FFluidChunkCoord& Coord)
 	{
 		Chunk->LoadChunk();
 		
+		// Try to restore from cache if persistence is enabled
+		if (StreamingConfig.bEnablePersistence)
+		{
+			FChunkPersistentData PersistentData;
+			if (LoadChunkData(Coord, PersistentData))
+			{
+				float VolumeBefore = Chunk->GetTotalFluidVolume();
+				Chunk->DeserializeChunkData(PersistentData);
+				float VolumeAfter = Chunk->GetTotalFluidVolume();
+				UE_LOG(LogTemp, Warning, TEXT("PERSISTENCE: Restored chunk %s from cache (Before: %.1f, After: %.1f, Saved: %.1f)"), 
+				       *Coord.ToString(), VolumeBefore, VolumeAfter, PersistentData.TotalFluidVolume);
+			}
+			else
+			{
+				UE_LOG(LogTemp, Log, TEXT("PERSISTENCE: No cached data for chunk %s, starting fresh"), *Coord.ToString());
+			}
+		}
+		
 		// Track load time for debug
 		ChunkLoadTimes.Add(Coord, FPlatformTime::Seconds());
 		ChunkStateHistory.Add(Coord, FString::Printf(TEXT("Loaded at %.2fs"), FPlatformTime::Seconds()));
@@ -1083,6 +1183,45 @@ void UFluidChunkManager::UnloadChunk(const FFluidChunkCoord& Coord)
 		UFluidChunk* Chunk = *ChunkPtr;
 		if (Chunk)
 		{
+			// Save to cache if persistence is enabled and chunk has fluid
+			if (StreamingConfig.bEnablePersistence)
+			{
+				if (Chunk->HasFluid())
+				{
+					// Check if enough time has passed since last save (prevent frequent saves)
+					const float CurrentTime = FPlatformTime::Seconds();
+					const float MinTimeBetweenSaves = 5.0f; // Don't save same chunk more than once per 5 seconds
+					
+					bool bShouldSave = true;
+					if (float* LastSaveTime = ChunkLastSaveTime.Find(Coord))
+					{
+						if (CurrentTime - *LastSaveTime < MinTimeBetweenSaves)
+						{
+							bShouldSave = false;
+							UE_LOG(LogTemp, Log, TEXT("PERSISTENCE: Skipping save for chunk %s (saved %.1fs ago)"), 
+							       *Coord.ToString(), CurrentTime - *LastSaveTime);
+						}
+					}
+					
+					if (bShouldSave)
+					{
+						FChunkPersistentData PersistentData = Chunk->SerializeChunkData();
+						SaveChunkData(Coord, PersistentData);
+						ChunkLastSaveTime.Add(Coord, CurrentTime);
+						UE_LOG(LogTemp, Warning, TEXT("PERSISTENCE: Saved chunk %s to cache (%.1f fluid volume, %d cells)"), 
+						       *Coord.ToString(), PersistentData.TotalFluidVolume, PersistentData.NonEmptyCellCount);
+					}
+				}
+				else
+				{
+					UE_LOG(LogTemp, Log, TEXT("PERSISTENCE: Chunk %s has no fluid, not saving"), *Coord.ToString());
+				}
+			}
+			else
+			{
+				UE_LOG(LogTemp, Log, TEXT("PERSISTENCE: Disabled, not saving chunk %s"), *Coord.ToString());
+			}
+			
 			Chunk->UnloadChunk();
 			ActiveChunkCoords.Remove(Coord);
 			InactiveChunkCoords.Remove(Coord);
@@ -1344,4 +1483,281 @@ bool UFluidChunkManager::ShouldUpdateDebugVisualization() const
 	}
 	
 	return false;
+}
+
+// ==================== Persistence Methods ====================
+
+void UFluidChunkManager::SaveChunkData(const FFluidChunkCoord& Coord, const FChunkPersistentData& Data)
+{
+	FScopeLock Lock(&CacheMutex);
+	
+	// Check if we're overwriting an existing entry
+	if (ChunkCache.Contains(Coord))
+	{
+		const FCachedChunkEntry& ExistingEntry = ChunkCache[Coord];
+		UE_LOG(LogTemp, Warning, TEXT("PERSISTENCE: Overwriting cache for chunk %s (Old: %.1f fluid, New: %.1f fluid)"),
+		       *Coord.ToString(), ExistingEntry.Data.TotalFluidVolume, Data.TotalFluidVolume);
+	}
+	
+	// Check cache size limit
+	if (ChunkCache.Num() >= StreamingConfig.MaxCachedChunks)
+	{
+		PruneExpiredCache();
+		
+		// If still over limit, remove oldest entries
+		if (ChunkCache.Num() >= StreamingConfig.MaxCachedChunks)
+		{
+			// Find and remove the oldest entry
+			float OldestTime = FLT_MAX;
+			FFluidChunkCoord OldestCoord;
+			
+			for (const auto& CachePair : ChunkCache)
+			{
+				if (CachePair.Value.CacheTime < OldestTime && CachePair.Value.AccessCount == 0)
+				{
+					OldestTime = CachePair.Value.CacheTime;
+					OldestCoord = CachePair.Key;
+				}
+			}
+			
+			if (OldestTime < FLT_MAX)
+			{
+				ChunkCache.Remove(OldestCoord);
+				UE_LOG(LogTemp, VeryVerbose, TEXT("Evicted oldest cached chunk %s"), *OldestCoord.ToString());
+			}
+		}
+	}
+	
+	// Add or update cache entry
+	FCachedChunkEntry& Entry = ChunkCache.FindOrAdd(Coord);
+	Entry.Data = Data;
+	Entry.CacheTime = FPlatformTime::Seconds();
+	Entry.AccessCount = 0;
+}
+
+bool UFluidChunkManager::LoadChunkData(const FFluidChunkCoord& Coord, FChunkPersistentData& OutData)
+{
+	FScopeLock Lock(&CacheMutex);
+	
+	if (FCachedChunkEntry* Entry = ChunkCache.Find(Coord))
+	{
+		// Check if expired
+		float CurrentTime = FPlatformTime::Seconds();
+		if (CurrentTime - Entry->CacheTime > StreamingConfig.CacheExpirationTime)
+		{
+			ChunkCache.Remove(Coord);
+			UE_LOG(LogTemp, VeryVerbose, TEXT("Cache entry for chunk %s expired"), *Coord.ToString());
+			return false;
+		}
+		
+		// Update access info
+		Entry->AccessCount++;
+		Entry->CacheTime = CurrentTime; // Refresh cache time on access
+		
+		OutData = Entry->Data;
+		return true;
+	}
+	
+	return false;
+}
+
+void UFluidChunkManager::ClearChunkCache()
+{
+	FScopeLock Lock(&CacheMutex);
+	
+	int32 ClearedCount = ChunkCache.Num();
+	ChunkCache.Empty();
+	
+	UE_LOG(LogTemp, Log, TEXT("Cleared chunk cache: %d entries removed"), ClearedCount);
+}
+
+void UFluidChunkManager::PruneExpiredCache()
+{
+	FScopeLock Lock(&CacheMutex);
+	
+	float CurrentTime = FPlatformTime::Seconds();
+	TArray<FFluidChunkCoord> ExpiredCoords;
+	
+	for (const auto& CachePair : ChunkCache)
+	{
+		if (CurrentTime - CachePair.Value.CacheTime > StreamingConfig.CacheExpirationTime)
+		{
+			ExpiredCoords.Add(CachePair.Key);
+		}
+	}
+	
+	for (const FFluidChunkCoord& Coord : ExpiredCoords)
+	{
+		ChunkCache.Remove(Coord);
+	}
+	
+	if (ExpiredCoords.Num() > 0)
+	{
+		UE_LOG(LogTemp, VeryVerbose, TEXT("Pruned %d expired cache entries"), ExpiredCoords.Num());
+	}
+}
+
+int32 UFluidChunkManager::GetCacheMemoryUsage() const
+{
+	FScopeLock Lock(&CacheMutex);
+	
+	int32 TotalBytes = 0;
+	for (const auto& CachePair : ChunkCache)
+	{
+		TotalBytes += CachePair.Value.Data.GetMemorySize();
+		TotalBytes += sizeof(FCachedChunkEntry);
+	}
+	
+	return TotalBytes / 1024; // Return in KB
+}
+
+int32 UFluidChunkManager::GetCacheSize() const
+{
+	FScopeLock Lock(&CacheMutex);
+	return ChunkCache.Num();
+}
+
+void UFluidChunkManager::SaveCacheToDisk()
+{
+	// Optional: Implement disk persistence
+	// This would serialize the cache to a file for long-term storage
+	// Could use FArchive or JSON serialization
+	UE_LOG(LogTemp, Warning, TEXT("SaveCacheToDisk not yet implemented"));
+}
+
+void UFluidChunkManager::LoadCacheFromDisk()
+{
+	// Optional: Implement disk persistence loading
+	// This would deserialize the cache from a file
+	UE_LOG(LogTemp, Warning, TEXT("LoadCacheFromDisk not yet implemented"));
+}
+
+void UFluidChunkManager::TestPersistence(const FVector& WorldPos)
+{
+	UE_LOG(LogTemp, Warning, TEXT("=== TESTING PERSISTENCE AT %s ==="), *WorldPos.ToString());
+	
+	// Get the chunk at this position
+	FFluidChunkCoord ChunkCoord = GetChunkCoordFromWorldPosition(WorldPos);
+	UFluidChunk* Chunk = GetChunk(ChunkCoord);
+	
+	if (!Chunk)
+	{
+		UE_LOG(LogTemp, Error, TEXT("No chunk found at position %s (chunk coord: %s)"),
+		       *WorldPos.ToString(), *ChunkCoord.ToString());
+		return;
+	}
+	
+	// Log current state
+	float VolumeBeforeSave = Chunk->GetTotalFluidVolume();
+	UE_LOG(LogTemp, Warning, TEXT("Chunk %s current fluid volume: %.2f"),
+	       *ChunkCoord.ToString(), VolumeBeforeSave);
+	
+	// Save the chunk data
+	if (Chunk->HasFluid())
+	{
+		FChunkPersistentData SaveData = Chunk->SerializeChunkData();
+		SaveChunkData(ChunkCoord, SaveData);
+		UE_LOG(LogTemp, Warning, TEXT("Saved chunk data: %d cells with fluid, %.2f total volume"),
+		       SaveData.NonEmptyCellCount, SaveData.TotalFluidVolume);
+		
+		// Clear the chunk to simulate unloading
+		for (int32 i = 0; i < Chunk->Cells.Num(); ++i)
+		{
+			if (!Chunk->Cells[i].bIsSolid)
+			{
+				Chunk->Cells[i].FluidLevel = 0.0f;
+			}
+		}
+		Chunk->NextCells = Chunk->Cells;
+		
+		UE_LOG(LogTemp, Warning, TEXT("Cleared chunk fluid. Current volume: %.2f"),
+		       Chunk->GetTotalFluidVolume());
+		
+		// Now reload from cache
+		FChunkPersistentData LoadData;
+		if (LoadChunkData(ChunkCoord, LoadData))
+		{
+			Chunk->DeserializeChunkData(LoadData);
+			float VolumeAfterLoad = Chunk->GetTotalFluidVolume();
+			UE_LOG(LogTemp, Warning, TEXT("Restored chunk from cache. New volume: %.2f"),
+			       VolumeAfterLoad);
+			
+			if (FMath::IsNearlyEqual(VolumeBeforeSave, VolumeAfterLoad, 0.01f))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("SUCCESS: Persistence test passed! Volume preserved."));
+			}
+			else
+			{
+				UE_LOG(LogTemp, Error, TEXT("FAILURE: Volume mismatch! Before: %.2f, After: %.2f"),
+				       VolumeBeforeSave, VolumeAfterLoad);
+			}
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error, TEXT("Failed to load chunk data from cache!"));
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Chunk has no fluid to test persistence with"));
+	}
+	
+	// Show cache status
+	UE_LOG(LogTemp, Warning, TEXT("Cache status: %d entries, %d KB memory"),
+	       GetCacheSize(), GetCacheMemoryUsage());
+}
+
+void UFluidChunkManager::ForceActivateChunk(UFluidChunk* Chunk)
+{
+	if (!Chunk)
+		return;
+	
+	const FFluidChunkCoord& Coord = Chunk->ChunkCoord;
+	
+	// Ensure chunk is in loaded chunks
+	if (!LoadedChunks.Contains(Coord))
+	{
+		LoadedChunks.Add(Coord, Chunk);
+	}
+	
+	// Call protected ActivateChunk method
+	ActivateChunk(Chunk);
+}
+
+void UFluidChunkManager::ForceUnloadAllChunks()
+{
+	UE_LOG(LogTemp, Warning, TEXT("=== FORCE UNLOADING ALL CHUNKS ==="));
+	
+	// Clear last save times to ensure all chunks get saved during force unload
+	ChunkLastSaveTime.Empty();
+	
+	TArray<FFluidChunkCoord> ChunksToUnload;
+	for (const auto& Pair : LoadedChunks)
+	{
+		ChunksToUnload.Add(Pair.Key);
+	}
+	
+	int32 SavedCount = 0;
+	float TotalSavedVolume = 0.0f;
+	
+	for (const FFluidChunkCoord& Coord : ChunksToUnload)
+	{
+		if (UFluidChunk* Chunk = GetChunk(Coord))
+		{
+			if (Chunk->HasFluid())
+			{
+				float Volume = Chunk->GetTotalFluidVolume();
+				TotalSavedVolume += Volume;
+				SavedCount++;
+				UE_LOG(LogTemp, Log, TEXT("Unloading chunk %s with %.1f fluid"),
+				       *Coord.ToString(), Volume);
+			}
+		}
+		UnloadChunk(Coord);
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("Force unloaded %d chunks. Saved %d with fluid (%.1f total volume)"),
+	       ChunksToUnload.Num(), SavedCount, TotalSavedVolume);
+	UE_LOG(LogTemp, Warning, TEXT("Cache now has %d entries using %d KB"),
+	       GetCacheSize(), GetCacheMemoryUsage());
 }

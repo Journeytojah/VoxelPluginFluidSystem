@@ -1,6 +1,69 @@
 #include "CellularAutomata/FluidChunk.h"
 #include "VoxelFluidStats.h"
 #include "Math/UnrealMathUtility.h"
+#include "HAL/UnrealMemory.h"
+
+// FChunkPersistentData implementation
+void FChunkPersistentData::CompressFrom(const TArray<FCAFluidCell>& Cells)
+{
+	CompressedCells.Empty(Cells.Num());
+	NonEmptyCellCount = 0;
+	TotalFluidVolume = 0.0f;
+	
+	for (const FCAFluidCell& Cell : Cells)
+	{
+		FCompressedFluidCell CompressedCell(Cell);
+		CompressedCells.Add(CompressedCell);
+		
+		if (Cell.FluidLevel > 0.001f && !Cell.bIsSolid)
+		{
+			NonEmptyCellCount++;
+			TotalFluidVolume += Cell.FluidLevel;
+		}
+	}
+	
+	bHasFluid = (NonEmptyCellCount > 0);
+	Timestamp = FPlatformTime::Seconds();
+	Checksum = CalculateChecksum();
+}
+
+void FChunkPersistentData::DecompressTo(TArray<FCAFluidCell>& OutCells) const
+{
+	if (CompressedCells.Num() == 0)
+		return;
+	
+	if (OutCells.Num() != CompressedCells.Num())
+	{
+		OutCells.SetNum(CompressedCells.Num());
+	}
+	
+	for (int32 i = 0; i < CompressedCells.Num(); ++i)
+	{
+		CompressedCells[i].Decompress(OutCells[i]);
+	}
+}
+
+uint32 FChunkPersistentData::CalculateChecksum() const
+{
+	uint32 Hash = 0;
+	for (const FCompressedFluidCell& Cell : CompressedCells)
+	{
+		Hash = HashCombine(Hash, GetTypeHash(Cell.FluidLevel));
+		Hash = HashCombine(Hash, GetTypeHash(Cell.Flags));
+	}
+	return Hash;
+}
+
+bool FChunkPersistentData::ValidateChecksum() const
+{
+	return Checksum == CalculateChecksum();
+}
+
+int32 FChunkPersistentData::GetMemorySize() const
+{
+	return sizeof(FChunkPersistentData) + 
+	       (CompressedCells.Num() * sizeof(FCompressedFluidCell));
+}
 
 UFluidChunk::UFluidChunk()
 {
@@ -218,6 +281,9 @@ void UFluidChunk::UnloadChunk()
 	State = EChunkState::Unloading;
 	
 	PendingBorderData = ExtractBorderData();
+	
+	// Note: Actual persistence happens in ChunkManager before calling this
+	// This allows the manager to handle caching strategy
 	
 	Cells.Empty();
 	NextCells.Empty();
@@ -493,6 +559,72 @@ int32 UFluidChunk::GetLocalCellIndex(int32 X, int32 Y, int32 Z) const
 	
 	return X + Y * ChunkSize + Z * ChunkSize * ChunkSize;
 }
+
+FChunkPersistentData UFluidChunk::SerializeChunkData() const
+{
+	FChunkPersistentData PersistentData;
+	PersistentData.ChunkCoord = ChunkCoord;
+	PersistentData.CompressFrom(Cells);
+	
+	UE_LOG(LogTemp, Log, TEXT("Serialized chunk %s: %d non-empty cells, %.2f total fluid"),
+	       *ChunkCoord.ToString(), PersistentData.NonEmptyCellCount, PersistentData.TotalFluidVolume);
+	
+	return PersistentData;
+}
+
+void UFluidChunk::DeserializeChunkData(const FChunkPersistentData& PersistentData)
+{
+	if (!PersistentData.ValidateChecksum())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Chunk %s failed checksum validation, loading empty"),
+		       *ChunkCoord.ToString());
+		return;
+	}
+	
+	if (PersistentData.CompressedCells.Num() != Cells.Num())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Chunk %s size mismatch: expected %d cells, got %d"),
+		       *ChunkCoord.ToString(), Cells.Num(), PersistentData.CompressedCells.Num());
+		       
+		if (PersistentData.CompressedCells.Num() == ChunkSize * ChunkSize * ChunkSize)
+		{
+			// Size matches expected chunk size, resize our arrays
+			Cells.SetNum(PersistentData.CompressedCells.Num());
+			NextCells.SetNum(PersistentData.CompressedCells.Num());
+		}
+		else
+		{
+			return; // Can't load mismatched data
+		}
+	}
+	
+	PersistentData.DecompressTo(Cells);
+	NextCells = Cells;
+	
+	UE_LOG(LogTemp, Log, TEXT("Deserialized chunk %s: %d non-empty cells, %.2f total fluid"),
+	       *ChunkCoord.ToString(), PersistentData.NonEmptyCellCount, PersistentData.TotalFluidVolume);
+	       
+	// Mark as needing mesh update if there's fluid
+	if (PersistentData.bHasFluid)
+	{
+		bDirty = true;
+		ConsiderMeshUpdate(1.0f);
+	}
+}
+
+bool UFluidChunk::HasFluid() const
+{
+	for (const FCAFluidCell& Cell : Cells)
+	{
+		if (Cell.FluidLevel > MinFluidLevel && !Cell.bIsSolid)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// GetTotalFluidVolume implementation is at line 496
 
 void UFluidChunk::ApplyGravity(float DeltaTime)
 {

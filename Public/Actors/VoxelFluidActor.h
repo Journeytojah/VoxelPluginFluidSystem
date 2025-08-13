@@ -141,7 +141,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties")
 	bool bAllowFluidEscape = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.0", ClampMax = "100.0"))
 	float FluidAccumulation = 0.1f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.001", ClampMax = "0.1"))
@@ -150,7 +150,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.1", ClampMax = "5.0"))
 	float FluidEvaporationRate = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.0", ClampMax = "2.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.0", ClampMax = "20.0"))
 	float FluidDensityMultiplier = 1.0f;
 
 
@@ -196,6 +196,22 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Chunk System")
 	FString GetChunkSystemStats() const;
+
+	// Debug functions for testing persistence
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid Debug", meta = (CallInEditor = "true"))
+	void TestPersistenceAtLocation(const FVector& WorldPosition);
+	
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid Debug", meta = (CallInEditor = "true"))
+	void ForceUnloadAllChunks();
+	
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid Debug", meta = (CallInEditor = "true"))
+	void ShowCacheStatus();
+	
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid Debug", meta = (CallInEditor = "true"))
+	void TestPersistenceWithSourcePause();
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
+	bool bPauseFluidSources = false;
 
 private:
 	TMap<FVector, float> FluidSources;

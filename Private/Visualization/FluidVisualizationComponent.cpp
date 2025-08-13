@@ -243,9 +243,57 @@ void UFluidVisualizationComponent::SetChunkManager(UFluidChunkManager* InChunkMa
 	UpdateVisualization();
 }
 
+void UFluidVisualizationComponent::OnChunkUnloaded(const FFluidChunkCoord& ChunkCoord)
+{
+	// Clean up any cached visualization data for the unloaded chunk
+	// This prevents trying to render chunks that no longer exist
+	
+	// Find and remove the chunk from our tracking maps
+	TArray<UFluidChunk*> ChunksToRemove;
+	
+	for (auto& Pair : ChunkMeshComponents)
+	{
+		if (Pair.Key && Pair.Key->ChunkCoord == ChunkCoord)
+		{
+			ChunksToRemove.Add(Pair.Key);
+			if (Pair.Value)
+			{
+				Pair.Value->ClearInstances();
+				Pair.Value->DestroyComponent();
+			}
+		}
+	}
+	
+	for (auto& Pair : ChunkMarchingCubesMeshes)
+	{
+		if (Pair.Key && Pair.Key->ChunkCoord == ChunkCoord)
+		{
+			ChunksToRemove.Add(Pair.Key);
+			if (Pair.Value)
+			{
+				Pair.Value->ClearAllMeshSections();
+				Pair.Value->DestroyComponent();
+			}
+		}
+	}
+	
+	// Remove from all tracking maps
+	for (UFluidChunk* Chunk : ChunksToRemove)
+	{
+		ChunkMeshComponents.Remove(Chunk);
+		ChunkMarchingCubesMeshes.Remove(Chunk);
+		ChunksNeedingMeshUpdate.Remove(Chunk);
+		ChunkLastMeshUpdateTime.Remove(Chunk);
+	}
+}
+
 void UFluidVisualizationComponent::GenerateChunkedVisualization()
 {
 	if (!ChunkManager)
+		return;
+	
+	// Skip visualization if chunk manager is processing chunk operations
+	if (ChunkManager->IsProcessingChunkOperations())
 		return;
 	
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_Visualization);

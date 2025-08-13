@@ -136,6 +136,92 @@ struct VOXELFLUIDSYSTEM_API FChunkBorderData
 	}
 };
 
+// Compressed fluid data for a single cell (2 bytes instead of full struct)
+USTRUCT()
+struct FCompressedFluidCell
+{
+	GENERATED_BODY()
+
+	uint16 FluidLevel; // Quantized to 16-bit (0-65535 maps to 0.0-1.0)
+	uint8 Flags; // Bit 0: bIsSolid, Bit 1: bSettled, Bit 2: bSourceBlock
+	
+	FCompressedFluidCell()
+	{
+		FluidLevel = 0;
+		Flags = 0;
+	}
+	
+	FCompressedFluidCell(const FCAFluidCell& Cell)
+	{
+		// Quantize fluid level to 16-bit
+		FluidLevel = (uint16)(FMath::Clamp(Cell.FluidLevel, 0.0f, 1.0f) * 65535.0f);
+		
+		// Pack flags
+		Flags = 0;
+		if (Cell.bIsSolid) Flags |= 0x01;
+		if (Cell.bSettled) Flags |= 0x02;
+		if (Cell.bSourceBlock) Flags |= 0x04;
+	}
+	
+	void Decompress(FCAFluidCell& OutCell) const
+	{
+		OutCell.FluidLevel = (float)FluidLevel / 65535.0f;
+		OutCell.bIsSolid = (Flags & 0x01) != 0;
+		OutCell.bSettled = (Flags & 0x02) != 0;
+		OutCell.bSourceBlock = (Flags & 0x04) != 0;
+		OutCell.LastFluidLevel = OutCell.FluidLevel;
+		OutCell.SettledCounter = OutCell.bSettled ? 10 : 0;
+	}
+};
+
+// Persistent chunk data that can be saved/loaded
+USTRUCT(BlueprintType)
+struct VOXELFLUIDSYSTEM_API FChunkPersistentData
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FFluidChunkCoord ChunkCoord;
+	
+	UPROPERTY()
+	TArray<FCompressedFluidCell> CompressedCells;
+	
+	UPROPERTY()
+	float Timestamp;
+	
+	UPROPERTY()
+	int32 Version = 1;
+	
+	UPROPERTY()
+	uint32 Checksum = 0;
+	
+	// Statistics for optimization
+	UPROPERTY()
+	int32 NonEmptyCellCount = 0;
+	
+	UPROPERTY()
+	float TotalFluidVolume = 0.0f;
+	
+	UPROPERTY()
+	bool bHasFluid = false;
+	
+	FChunkPersistentData()
+	{
+		Timestamp = 0.0f;
+		Version = 1;
+		Checksum = 0;
+		NonEmptyCellCount = 0;
+		TotalFluidVolume = 0.0f;
+		bHasFluid = false;
+	}
+	
+	void CompressFrom(const TArray<FCAFluidCell>& Cells);
+	void DecompressTo(TArray<FCAFluidCell>& OutCells) const;
+	uint32 CalculateChecksum() const;
+	bool ValidateChecksum() const;
+	int32 GetMemorySize() const;
+};
+
 UCLASS(BlueprintType)
 class VOXELFLUIDSYSTEM_API UFluidChunk : public UObject
 {
@@ -152,6 +238,12 @@ public:
 	void DeactivateChunk();
 	void LoadChunk();
 	void UnloadChunk();
+	
+	// Persistence methods
+	FChunkPersistentData SerializeChunkData() const;
+	void DeserializeChunkData(const FChunkPersistentData& PersistentData);
+	bool HasFluid() const;
+	float GetTotalFluidVolume() const;
 
 	void AddFluid(int32 LocalX, int32 LocalY, int32 LocalZ, float Amount);
 	void RemoveFluid(int32 LocalX, int32 LocalY, int32 LocalZ, float Amount);
@@ -170,7 +262,6 @@ public:
 	void UpdateBorderCell(int32 LocalX, int32 LocalY, int32 LocalZ, const FCAFluidCell& Cell);
 	
 	bool HasActiveFluid() const;
-	float GetTotalFluidVolume() const;
 	int32 GetActiveCellCount() const;
 	
 	FBox GetWorldBounds() const;
