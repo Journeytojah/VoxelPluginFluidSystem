@@ -260,6 +260,13 @@ public:
 	bool bDirty = false;
 	bool bBorderDirty = false;
 	
+	// Activity tracking for optimization
+	bool bFullySettled = false;
+	float TotalFluidActivity = 0.0f;
+	float LastActivityLevel = 0.0f;
+	int32 InactiveFrameCount = 0;
+	int32 UpdateFrequency = 1; // 1 = every frame, 2 = every other frame, etc.
+	
 	TSet<FFluidChunkCoord> ActiveNeighbors;
 
 protected:

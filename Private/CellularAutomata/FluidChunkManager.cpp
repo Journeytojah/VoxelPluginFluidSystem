@@ -164,23 +164,80 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 	
 	TArray<UFluidChunk*> ActiveChunkArray = GetActiveChunks();
 	
-	// First, update individual chunk simulations
-	if (StreamingConfig.bUseAsyncLoading && ActiveChunkArray.Num() > 4)
+	// Separate chunks by activity level for sparse processing
+	TArray<UFluidChunk*> HighActivityChunks;
+	TArray<UFluidChunk*> LowActivityChunks;
+	TArray<UFluidChunk*> SettledChunks;
+	
+	HighActivityChunks.Reserve(ActiveChunkArray.Num() / 2);
+	LowActivityChunks.Reserve(ActiveChunkArray.Num() / 2);
+	SettledChunks.Reserve(ActiveChunkArray.Num() / 4);
+	
+	// Categorize chunks by activity
+	for (UFluidChunk* Chunk : ActiveChunkArray)
 	{
-		ParallelFor(ActiveChunkArray.Num(), [&](int32 Index)
+		if (!Chunk) continue;
+		
+		if (Chunk->bFullySettled && Chunk->InactiveFrameCount > 120)
 		{
-			if (ActiveChunkArray[Index])
+			SettledChunks.Add(Chunk);
+		}
+		else if (Chunk->LastActivityLevel < 0.01f)
+		{
+			LowActivityChunks.Add(Chunk);
+		}
+		else
+		{
+			HighActivityChunks.Add(Chunk);
+		}
+	}
+	
+	// Process high activity chunks every frame
+	if (StreamingConfig.bUseAsyncLoading && HighActivityChunks.Num() > 4)
+	{
+		ParallelFor(HighActivityChunks.Num(), [&](int32 Index)
+		{
+			if (HighActivityChunks[Index])
 			{
-				ActiveChunkArray[Index]->UpdateSimulation(DeltaTime);
+				HighActivityChunks[Index]->UpdateSimulation(DeltaTime);
 			}
 		});
 	}
 	else
 	{
-		for (UFluidChunk* Chunk : ActiveChunkArray)
+		for (UFluidChunk* Chunk : HighActivityChunks)
 		{
 			if (Chunk)
 			{
+				Chunk->UpdateSimulation(DeltaTime);
+			}
+		}
+	}
+	
+	// Process low activity chunks less frequently
+	static int32 LowActivityCounter = 0;
+	LowActivityCounter++;
+	if ((LowActivityCounter % 2) == 0) // Every other frame
+	{
+		for (UFluidChunk* Chunk : LowActivityChunks)
+		{
+			if (Chunk)
+			{
+				Chunk->UpdateSimulation(DeltaTime);
+			}
+		}
+	}
+	
+	// Process settled chunks very rarely
+	static int32 SettledCounter = 0;
+	SettledCounter++;
+	if ((SettledCounter % 10) == 0) // Every 10th frame
+	{
+		for (UFluidChunk* Chunk : SettledChunks)
+		{
+			if (Chunk)
+			{
+				// Just check if they need to be woken up
 				Chunk->UpdateSimulation(DeltaTime);
 			}
 		}

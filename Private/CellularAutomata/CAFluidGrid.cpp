@@ -53,6 +53,36 @@ void UCAFluidGrid::UpdateSimulation(float DeltaTime)
 	{
 		return;
 	}
+	
+	// Quick scan for any fluid activity
+	bool bHasActiveFluid = false;
+	for (int32 i = 0; i < Cells.Num(); i += 16) // Sample every 16th cell for quick check
+	{
+		if (i < Cells.Num() && Cells[i].FluidLevel > MinFluidLevel && !Cells[i].bSettled)
+		{
+			bHasActiveFluid = true;
+			break;
+		}
+	}
+	
+	// If no active fluid found in sampling, do full check
+	if (!bHasActiveFluid)
+	{
+		for (int32 i = 0; i < Cells.Num(); ++i)
+		{
+			if (Cells[i].FluidLevel > MinFluidLevel && !Cells[i].bSettled)
+			{
+				bHasActiveFluid = true;
+				break;
+			}
+		}
+		
+		if (!bHasActiveFluid)
+		{
+			// Everything is settled, skip simulation
+			return;
+		}
+	}
 
 	// Store previous state for settling detection
 	for (int32 i = 0; i < Cells.Num(); ++i)
@@ -90,9 +120,8 @@ void UCAFluidGrid::UpdateSimulation(float DeltaTime)
 		InitializeUpdateFlags();
 	}
 
-	// Simple CA passes in order
-	ProcessGravity(DeltaTime);
-	ProcessCompression(DeltaTime);
+	// Combined physics pass for better cache efficiency
+	ProcessCombinedPhysics(DeltaTime);
 	ProcessHorizontalFlow(DeltaTime);
 	ProcessEqualization(DeltaTime);
 	UpdateSettledStates();
@@ -108,11 +137,15 @@ void UCAFluidGrid::UpdateSimulation(float DeltaTime)
 	}
 }
 
-void UCAFluidGrid::ProcessGravity(float DeltaTime)
+void UCAFluidGrid::ProcessCombinedPhysics(float DeltaTime)
 {
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ApplyGravity);
-	// Simple gravity: water falls straight down
-	// Process from bottom to top to avoid conflicts
+	// Combined gravity and compression in a single pass for better cache efficiency
+	// Process from bottom to top for gravity, handle compression simultaneously
+
+	// Track cells that need compression processing
+	TArray<int32> CompressionCells;
+	CompressionCells.Reserve(1024);
 
 	// Process gravity from bottom up
 	for (int32 z = 1; z < GridSizeZ; ++z)
@@ -126,37 +159,93 @@ void UCAFluidGrid::ProcessGravity(float DeltaTime)
 					continue;
 
 				const int32 CurrentIdx = GetCellIndex(x, y, z);
-				const int32 BelowIdx = GetCellIndex(x, y, z - 1);
-
-				if (CurrentIdx == -1 || BelowIdx == -1)
+				if (CurrentIdx == -1)
 					continue;
 
 				FCAFluidCell& CurrentCell = Cells[CurrentIdx];
-				FCAFluidCell& BelowCell = NextCells[BelowIdx];
 
 				// Skip if current cell is empty
-				if (CurrentCell.FluidLevel <= MinFluidLevel)
+				if (CurrentCell.FluidLevel <= MinFluidLevel || CurrentCell.bIsSolid)
 					continue;
 
-				// Skip if below is solid
-				if (BelowCell.bIsSolid)
-					continue;
-
-				// Calculate how much can flow down
-				const float SpaceBelow = MaxFluidLevel - BelowCell.FluidLevel;
-				if (SpaceBelow > MinFluidLevel)
+				// === GRAVITY PROCESSING ===
+				const int32 BelowIdx = GetCellIndex(x, y, z - 1);
+				if (BelowIdx != -1)
 				{
-					// Transfer as much as possible
-					const float TransferAmount = FMath::Min(CurrentCell.FluidLevel, SpaceBelow);
-					
-					NextCells[CurrentIdx].FluidLevel -= TransferAmount;
-					NextCells[BelowIdx].FluidLevel += TransferAmount;
-					
-					// Wake up the cells involved and their neighbors
-					if (bEnableSettling)
+					FCAFluidCell& BelowCell = NextCells[BelowIdx];
+
+					// Skip if below is solid
+					if (!BelowCell.bIsSolid)
 					{
-						WakeUpNeighbors(x, y, z);
-						WakeUpNeighbors(x, y, z - 1);
+						// Calculate how much can flow down
+						const float SpaceBelow = MaxFluidLevel - BelowCell.FluidLevel;
+						if (SpaceBelow > MinFluidLevel)
+						{
+							// Transfer as much as possible
+							const float TransferAmount = FMath::Min(CurrentCell.FluidLevel, SpaceBelow);
+							
+							NextCells[CurrentIdx].FluidLevel -= TransferAmount;
+							NextCells[BelowIdx].FluidLevel += TransferAmount;
+							
+							// Wake up the cells involved and their neighbors
+							if (bEnableSettling)
+							{
+								WakeUpNeighbors(x, y, z);
+								WakeUpNeighbors(x, y, z - 1);
+							}
+						}
+					}
+				}
+
+				// === COMPRESSION CHECK ===
+				// Check if this cell needs upward compression (overfilled)
+				if (NextCells[CurrentIdx].FluidLevel > MaxFluidLevel && z < GridSizeZ - 1)
+				{
+					CompressionCells.Add(CurrentIdx);
+				}
+			}
+		}
+	}
+
+	// === COMPRESSION PROCESSING ===
+	// Process compression for overfilled cells
+	for (int32 CompressIdx : CompressionCells)
+	{
+		FCAFluidCell& CurrentCell = NextCells[CompressIdx];
+		
+		// If still overfilled after gravity
+		if (CurrentCell.FluidLevel > MaxFluidLevel && !CurrentCell.bIsSolid)
+		{
+			// Get cell coordinates
+			int32 x = CompressIdx % GridSizeX;
+			int32 y = (CompressIdx / GridSizeX) % GridSizeY;
+			int32 z = CompressIdx / (GridSizeX * GridSizeY);
+			
+			if (z < GridSizeZ - 1)
+			{
+				const int32 AboveIdx = GetCellIndex(x, y, z + 1);
+				if (AboveIdx != -1)
+				{
+					FCAFluidCell& AboveCell = NextCells[AboveIdx];
+					
+					// Push excess water upward if possible
+					if (!AboveCell.bIsSolid)
+					{
+						const float Excess = CurrentCell.FluidLevel - MaxFluidLevel;
+						const float SpaceAbove = MaxFluidLevel - AboveCell.FluidLevel;
+						const float TransferAmount = FMath::Min(Excess, SpaceAbove);
+						
+						CurrentCell.FluidLevel -= TransferAmount;
+						AboveCell.FluidLevel += TransferAmount;
+						AboveCell.bSettled = false;
+						AboveCell.SettledCounter = 0;
+						
+						// Wake up the cells involved and their neighbors
+						if (bEnableSettling)
+						{
+							WakeUpNeighbors(x, y, z);
+							WakeUpNeighbors(x, y, z + 1);
+						}
 					}
 				}
 			}
@@ -301,57 +390,7 @@ void UCAFluidGrid::ProcessHorizontalFlow(float DeltaTime)
 	}
 }
 
-void UCAFluidGrid::ProcessCompression(float DeltaTime)
-{
-	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ApplyPressure);
-	
-	// Simple compression: when a cell is overfilled, push water upward
-	for (int32 z = 0; z < GridSizeZ - 1; ++z)
-	{
-		for (int32 y = 0; y < GridSizeY; ++y)
-		{
-			for (int32 x = 0; x < GridSizeX; ++x)
-			{
-				// Skip settled cells if settling is enabled
-				if (bEnableSettling && !ShouldUpdateCell(x, y, z))
-					continue;
-				
-				const int32 CurrentIdx = GetCellIndex(x, y, z);
-				const int32 AboveIdx = GetCellIndex(x, y, z + 1);
-				
-				if (CurrentIdx == -1 || AboveIdx == -1)
-					continue;
-				
-				FCAFluidCell& CurrentCell = NextCells[CurrentIdx];
-				FCAFluidCell& AboveCell = NextCells[AboveIdx];
-				
-				// If current cell is overfilled and not solid
-				if (CurrentCell.FluidLevel > MaxFluidLevel && !CurrentCell.bIsSolid)
-				{
-					// Push excess water upward if possible
-					if (!AboveCell.bIsSolid)
-					{
-						const float Excess = CurrentCell.FluidLevel - MaxFluidLevel;
-						const float SpaceAbove = MaxFluidLevel - AboveCell.FluidLevel;
-						const float TransferAmount = FMath::Min(Excess, SpaceAbove);
-						
-						CurrentCell.FluidLevel -= TransferAmount;
-						AboveCell.FluidLevel += TransferAmount;
-						AboveCell.bSettled = false;
-						AboveCell.SettledCounter = 0;
-						
-						// Wake up the cells involved and their neighbors
-						if (bEnableSettling)
-						{
-							WakeUpNeighbors(x, y, z);
-							WakeUpNeighbors(x, y, z + 1);
-						}
-					}
-				}
-			}
-		}
-	}
-}
+// ProcessCompression is now integrated into ProcessCombinedPhysics for better performance
 
 void UCAFluidGrid::ProcessEqualization(float DeltaTime)
 {

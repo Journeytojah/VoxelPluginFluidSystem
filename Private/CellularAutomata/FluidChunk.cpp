@@ -51,6 +51,21 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_UpdateSimulation);
 	
+	// Early exit if chunk is fully settled and has no activity
+	if (bFullySettled && InactiveFrameCount > 60) // Skip after 1 second of inactivity
+	{
+		InactiveFrameCount++;
+		return;
+	}
+	
+	// Check if we should skip this frame based on hierarchical update frequency
+	static int32 FrameCounter = 0;
+	FrameCounter++;
+	if (UpdateFrequency > 1 && (FrameCounter % UpdateFrequency) != 0)
+	{
+		return;
+	}
+	
 	// Track total fluid change for mesh update decision
 	float TotalFluidChange = 0.0f;
 	for (int32 i = 0; i < Cells.Num(); ++i)
@@ -94,10 +109,52 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	// Cells = NextCells;
 	LastUpdateTime += DeltaTime;
 	
-	// Calculate total change and consider mesh update
+	// Calculate total change and activity metrics
+	int32 SettledCount = 0;
+	int32 FluidCellCount = 0;
+	TotalFluidActivity = 0.0f;
+	
 	for (int32 i = 0; i < NextCells.Num(); ++i)
 	{
-		TotalFluidChange += FMath::Abs(NextCells[i].FluidLevel - NextCells[i].LastFluidLevel);
+		const float Change = FMath::Abs(NextCells[i].FluidLevel - NextCells[i].LastFluidLevel);
+		TotalFluidChange += Change;
+		TotalFluidActivity += Change;
+		
+		if (NextCells[i].FluidLevel > MinFluidLevel && !NextCells[i].bIsSolid)
+		{
+			FluidCellCount++;
+			if (NextCells[i].bSettled)
+			{
+				SettledCount++;
+			}
+		}
+	}
+	
+	// Update activity tracking
+	if (TotalFluidActivity < 0.0001f)
+	{
+		InactiveFrameCount++;
+	}
+	else
+	{
+		InactiveFrameCount = 0;
+	}
+	
+	// Check if chunk is fully settled
+	bFullySettled = (FluidCellCount > 0) && (SettledCount == FluidCellCount);
+	
+	// Adjust update frequency based on activity level
+	if (TotalFluidActivity < 0.001f && bFullySettled)
+	{
+		UpdateFrequency = 4; // Very low activity, update every 4th frame
+	}
+	else if (TotalFluidActivity < 0.01f)
+	{
+		UpdateFrequency = 2; // Low activity, update every other frame
+	}
+	else
+	{
+		UpdateFrequency = 1; // Normal activity, update every frame
 	}
 	
 	// Only consider mesh update if there was significant change
@@ -107,6 +164,7 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	}
 	
 	bDirty = true;
+	LastActivityLevel = TotalFluidActivity;
 }
 
 void UFluidChunk::ActivateChunk()

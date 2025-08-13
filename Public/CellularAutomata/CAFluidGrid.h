@@ -154,10 +154,9 @@ protected:
 	int32 GetCellIndex(int32 X, int32 Y, int32 Z) const;
 	
 	// Simplified CA methods
-	void ProcessGravity(float DeltaTime);
+	void ProcessCombinedPhysics(float DeltaTime);  // Combined gravity + compression
 	void ProcessHorizontalFlow(float DeltaTime);
 	void ProcessEqualization(float DeltaTime);
-	void ProcessCompression(float DeltaTime);
 	void UpdateSettledStates();
 	
 	// Settling optimization methods
