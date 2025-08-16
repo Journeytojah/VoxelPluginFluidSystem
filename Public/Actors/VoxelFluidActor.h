@@ -9,6 +9,7 @@ class UFluidChunkManager;
 class UVoxelFluidIntegration;
 class UFluidVisualizationComponent;
 class UBoxComponent;
+class UBillboardComponent;
 struct FChunkStreamingConfig;
 
 UCLASS(Blueprintable, BlueprintType)
@@ -67,6 +68,11 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UBoxComponent* BoundsComponent;
+
+#if WITH_EDITORONLY_DATA
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	UBillboardComponent* SpriteComponent;
+#endif
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UCAFluidGrid* FluidGrid;

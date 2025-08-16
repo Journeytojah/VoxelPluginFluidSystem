@@ -295,7 +295,7 @@ void UFluidChunk::UnloadChunk()
 void UFluidChunk::AddFluid(int32 LocalX, int32 LocalY, int32 LocalZ, float Amount)
 {
 	const int32 Idx = GetLocalCellIndex(LocalX, LocalY, LocalZ);
-	if (Idx != -1 && !Cells[Idx].bIsSolid)
+	if (Idx >= 0 && Idx < Cells.Num() && !Cells[Idx].bIsSolid)
 	{
 		const float OldLevel = Cells[Idx].FluidLevel;
 		Cells[Idx].FluidLevel = FMath::Min(Cells[Idx].FluidLevel + Amount, MaxFluidLevel);
@@ -308,7 +308,7 @@ void UFluidChunk::AddFluid(int32 LocalX, int32 LocalY, int32 LocalZ, float Amoun
 void UFluidChunk::RemoveFluid(int32 LocalX, int32 LocalY, int32 LocalZ, float Amount)
 {
 	const int32 Idx = GetLocalCellIndex(LocalX, LocalY, LocalZ);
-	if (Idx != -1)
+	if (Idx >= 0 && Idx < Cells.Num())
 	{
 		const float OldLevel = Cells[Idx].FluidLevel;
 		Cells[Idx].FluidLevel = FMath::Max(Cells[Idx].FluidLevel - Amount, 0.0f);
@@ -321,7 +321,12 @@ void UFluidChunk::RemoveFluid(int32 LocalX, int32 LocalY, int32 LocalZ, float Am
 float UFluidChunk::GetFluidAt(int32 LocalX, int32 LocalY, int32 LocalZ) const
 {
 	const int32 Idx = GetLocalCellIndex(LocalX, LocalY, LocalZ);
-	return (Idx != -1) ? Cells[Idx].FluidLevel : 0.0f;
+	// Add explicit bounds checking to prevent array access violations
+	if (Idx >= 0 && Idx < Cells.Num())
+	{
+		return Cells[Idx].FluidLevel;
+	}
+	return 0.0f;
 }
 
 void UFluidChunk::SetTerrainHeight(int32 LocalX, int32 LocalY, float Height)
@@ -329,7 +334,7 @@ void UFluidChunk::SetTerrainHeight(int32 LocalX, int32 LocalY, float Height)
 	for (int32 z = 0; z < ChunkSize; ++z)
 	{
 		const int32 Idx = GetLocalCellIndex(LocalX, LocalY, z);
-		if (Idx != -1)
+		if (Idx >= 0 && Idx < Cells.Num())
 		{
 			Cells[Idx].TerrainHeight = Height;
 			
@@ -348,7 +353,7 @@ void UFluidChunk::SetTerrainHeight(int32 LocalX, int32 LocalY, float Height)
 void UFluidChunk::SetCellSolid(int32 LocalX, int32 LocalY, int32 LocalZ, bool bSolid)
 {
 	const int32 Idx = GetLocalCellIndex(LocalX, LocalY, LocalZ);
-	if (Idx != -1)
+	if (Idx >= 0 && Idx < Cells.Num())
 	{
 		bool bWasSolid = Cells[Idx].bIsSolid;
 		Cells[Idx].bIsSolid = bSolid;
@@ -395,7 +400,7 @@ void UFluidChunk::SetCellSolid(int32 LocalX, int32 LocalY, int32 LocalZ, bool bS
 bool UFluidChunk::IsCellSolid(int32 LocalX, int32 LocalY, int32 LocalZ) const
 {
 	const int32 Idx = GetLocalCellIndex(LocalX, LocalY, LocalZ);
-	if (Idx != -1)
+	if (Idx >= 0 && Idx < Cells.Num())
 	{
 		return Cells[Idx].bIsSolid;
 	}
@@ -476,7 +481,7 @@ void UFluidChunk::ApplyBorderData(const FChunkBorderData& BorderData)
 void UFluidChunk::UpdateBorderCell(int32 LocalX, int32 LocalY, int32 LocalZ, const FCAFluidCell& Cell)
 {
 	const int32 Idx = GetLocalCellIndex(LocalX, LocalY, LocalZ);
-	if (Idx != -1)
+	if (Idx >= 0 && Idx < Cells.Num())
 	{
 		Cells[Idx] = Cell;
 		bDirty = true;

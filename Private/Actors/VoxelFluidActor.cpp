@@ -4,8 +4,11 @@
 #include "VoxelIntegration/VoxelFluidIntegration.h"
 #include "Visualization/FluidVisualizationComponent.h"
 #include "Components/BoxComponent.h"
+#include "Components/BillboardComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
+#include "Engine/Texture2D.h"
+#include "UObject/ConstructorHelpers.h"
 #include "VoxelFluidStats.h"
 #include "GameFramework/PlayerController.h"
 
@@ -17,6 +20,34 @@ AVoxelFluidActor::AVoxelFluidActor()
 	RootComponent = BoundsComponent;
 	BoundsComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	
+#if WITH_EDITORONLY_DATA
+	// Create billboard component for editor visualization
+	SpriteComponent = CreateEditorOnlyDefaultSubobject<UBillboardComponent>(TEXT("SpriteComponent"));
+	if (SpriteComponent)
+	{
+		SpriteComponent->SetupAttachment(RootComponent);
+		SpriteComponent->SetRelativeLocation(FVector(0.0f, 0.0f, 50.0f)); // Slight offset above actor
+		SpriteComponent->bHiddenInGame = true;
+		SpriteComponent->bIsScreenSizeScaled = true;
+		SpriteComponent->ScreenSize = 0.0025f;
+		
+		// Try to load a water/fluid icon, fallback to default icon if not found
+		static ConstructorHelpers::FObjectFinder<UTexture2D> WaterSpriteTexture(TEXT("/Engine/EditorResources/S_Fluid"));
+		if (WaterSpriteTexture.Succeeded())
+		{
+			SpriteComponent->SetSprite(WaterSpriteTexture.Object);
+		}
+		else
+		{
+			// Try alternative paths for water/fluid related icons
+			static ConstructorHelpers::FObjectFinder<UTexture2D> AlternativeSprite(TEXT("/Engine/EditorResources/S_Emitter"));
+			if (AlternativeSprite.Succeeded())
+			{
+				SpriteComponent->SetSprite(AlternativeSprite.Object);
+			}
+		}
+	}
+#endif
 	
 	ChunkManager = CreateDefaultSubobject<UFluidChunkManager>(TEXT("ChunkManager"));
 	
