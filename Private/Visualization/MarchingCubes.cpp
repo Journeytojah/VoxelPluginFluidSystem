@@ -718,6 +718,7 @@ float FMarchingCubes::SampleDensityInterpolated(UFluidChunk* FluidChunk, UFluidC
     const int32 ChunkSize = FluidChunk->ChunkSize;
     
     // Get integer grid coordinates
+    // Note: We don't add epsilon here as it can cause incorrect cell selection
     int32 X0 = FMath::FloorToInt(LocalPosition.X);
     int32 Y0 = FMath::FloorToInt(LocalPosition.Y);
     int32 Z0 = FMath::FloorToInt(LocalPosition.Z);
@@ -726,28 +727,73 @@ float FMarchingCubes::SampleDensityInterpolated(UFluidChunk* FluidChunk, UFluidC
     int32 Y1 = Y0 + 1;
     int32 Z1 = Z0 + 1;
     
-    // Get fractional parts
+    // Get fractional parts for interpolation
     float FracX = LocalPosition.X - X0;
     float FracY = LocalPosition.Y - Y0;
     float FracZ = LocalPosition.Z - Z0;
     
-    // Helper lambda to get density with boundary handling
+    // Clamp fractions to avoid numerical issues
+    FracX = FMath::Clamp(FracX, 0.0f, 1.0f);
+    FracY = FMath::Clamp(FracY, 0.0f, 1.0f);
+    FracZ = FMath::Clamp(FracZ, 0.0f, 1.0f);
+    
+    // Helper lambda to get density with proper boundary handling
     auto GetDensity = [&](int32 X, int32 Y, int32 Z) -> float
     {
+        // Check if we're within this chunk
         if (X >= 0 && X < ChunkSize && Y >= 0 && Y < ChunkSize && Z >= 0 && Z < ChunkSize)
         {
             return FluidChunk->GetFluidAt(X, Y, Z);
         }
         else if (ChunkManager)
         {
-            // Sample from neighboring chunks
-            FVector WorldPos = FluidChunk->ChunkWorldPosition + FVector(X, Y, Z) * CellSize;
+            // Sample from neighboring chunk
+            // Calculate the exact world position for this grid point
+            FVector WorldPos = FluidChunk->ChunkWorldPosition + FVector(X * CellSize, Y * CellSize, Z * CellSize);
+            
+            // For boundary cells, we need to ensure we sample from the correct position
+            // When X >= ChunkSize, we're sampling from the next chunk
+            // When X < 0, we're sampling from the previous chunk
+            const float HalfCell = CellSize * 0.5f;
+            
+            // Adjust position to cell center for accurate sampling
+            if (X >= ChunkSize)
+            {
+                // Sampling from next chunk's first cells
+                WorldPos.X += HalfCell;
+            }
+            else if (X < 0)
+            {
+                // Sampling from previous chunk's last cells
+                // When X = -1, we want cell (ChunkSize-1) of previous chunk
+                // WorldPos is already at the cell start, add half to get center
+                WorldPos.X += HalfCell;
+            }
+            
+            if (Y >= ChunkSize)
+            {
+                WorldPos.Y += HalfCell;
+            }
+            else if (Y < 0)
+            {
+                WorldPos.Y += HalfCell;
+            }
+            
+            if (Z >= ChunkSize)
+            {
+                WorldPos.Z += HalfCell;
+            }
+            else if (Z < 0)
+            {
+                WorldPos.Z += HalfCell;
+            }
+                
             return ChunkManager->GetFluidAtWorldPosition(WorldPos);
         }
         return 0.0f;
     };
     
-    // Get density values at 8 corners
+    // Get density values at 8 corners of the interpolation cube
     float D000 = GetDensity(X0, Y0, Z0);
     float D100 = GetDensity(X1, Y0, Z0);
     float D010 = GetDensity(X0, Y1, Z0);
@@ -757,7 +803,7 @@ float FMarchingCubes::SampleDensityInterpolated(UFluidChunk* FluidChunk, UFluidC
     float D011 = GetDensity(X0, Y1, Z1);
     float D111 = GetDensity(X1, Y1, Z1);
     
-    // Trilinear interpolation
+    // Perform trilinear interpolation
     float C00 = D000 * (1.0f - FracX) + D100 * FracX;
     float C01 = D001 * (1.0f - FracX) + D101 * FracX;
     float C10 = D010 * (1.0f - FracX) + D110 * FracX;
@@ -784,23 +830,38 @@ void FMarchingCubes::GenerateHighResChunkMesh(UFluidChunk* FluidChunk, UFluidChu
     const float CellSize = FluidChunk->CellSize;
     const FVector ChunkOrigin = FluidChunk->ChunkWorldPosition;
     
-    // Calculate the high-resolution grid size
-    const int32 HighResSize = (ChunkSize - 1) * ResolutionMultiplier + 1;
+    // Calculate high-resolution grid dimensions
+    // We need to process one less than the full size to avoid double-processing at boundaries
+    const int32 HighResSize = ChunkSize * ResolutionMultiplier;
     const float HighResCellSize = CellSize / ResolutionMultiplier;
     
     // Process each high-resolution cube
-    for (int32 X = 0; X < HighResSize - 1; ++X)
+    // We need to process all cubes up to the chunk boundary
+    // Each cube samples at position and position+1, so the last valid cube
+    // is at HighResSize-1, which will sample into the neighboring chunk
+    for (int32 X = 0; X < HighResSize; ++X)
     {
-        for (int32 Y = 0; Y < HighResSize - 1; ++Y)
+        for (int32 Y = 0; Y < HighResSize; ++Y)
         {
-            for (int32 Z = 0; Z < HighResSize - 1; ++Z)
+            for (int32 Z = 0; Z < HighResSize; ++Z)
             {
+                // Calculate the actual position in chunk space
+                float LocalX = (float)X / ResolutionMultiplier;
+                float LocalY = (float)Y / ResolutionMultiplier;
+                float LocalZ = (float)Z / ResolutionMultiplier;
+                
+                // Skip cubes that start at or beyond the chunk boundary
+                // Cubes at position ChunkSize would belong to the next chunk
+                if (LocalX >= ChunkSize || LocalY >= ChunkSize || LocalZ >= ChunkSize)
+                    continue;
+                
                 FCubeConfiguration Config;
                 
                 // Set up the cube configuration at high resolution
                 const FVector CubeOrigin = ChunkOrigin + FVector(X, Y, Z) * HighResCellSize;
                 
                 // Fill in corner positions and interpolated density values
+                bool bHasValidDensity = false;
                 for (int32 CornerIndex = 0; CornerIndex < 8; ++CornerIndex)
                 {
                     const FVector RelativeCorner = CubeCorners[CornerIndex];
@@ -810,12 +871,50 @@ void FMarchingCubes::GenerateHighResChunkMesh(UFluidChunk* FluidChunk, UFluidChu
                     FVector LocalPos = FVector(X, Y, Z) + RelativeCorner;
                     LocalPos /= ResolutionMultiplier; // Convert to original grid space
                     
+                    // Sample with proper boundary handling - this will fetch from neighbors when needed
                     Config.DensityValues[CornerIndex] = SampleDensityInterpolated(FluidChunk, ChunkManager, LocalPos);
+                    
+                    if (Config.DensityValues[CornerIndex] > 0.0f)
+                        bHasValidDensity = true;
                 }
                 
-                // Generate mesh for this high-resolution cube
-                GenerateCube(Config, IsoLevel, OutVertices, OutTriangles);
+                // Only generate mesh for cubes that have some density
+                if (bHasValidDensity)
+                {
+                    GenerateCube(Config, IsoLevel, OutVertices, OutTriangles);
+                }
             }
         }
+    }
+}
+
+void FMarchingCubes::ProcessBoundaryCube(UFluidChunk* FluidChunk, UFluidChunkManager* ChunkManager,
+                                       int32 X, int32 Y, int32 Z,
+                                       int32 ResolutionMultiplier, float HighResCellSize,
+                                       const FVector& ChunkOrigin, float IsoLevel,
+                                       TArray<FMarchingCubesVertex>& OutVertices,
+                                       TArray<FMarchingCubesTriangle>& OutTriangles)
+{
+    FCubeConfiguration Config;
+    const FVector CubeOrigin = ChunkOrigin + FVector(X, Y, Z) * HighResCellSize;
+    
+    bool bHasValidDensity = false;
+    for (int32 CornerIndex = 0; CornerIndex < 8; ++CornerIndex)
+    {
+        const FVector RelativeCorner = CubeCorners[CornerIndex];
+        Config.Positions[CornerIndex] = CubeOrigin + RelativeCorner * HighResCellSize;
+        
+        FVector LocalPos = FVector(X, Y, Z) + RelativeCorner;
+        LocalPos /= ResolutionMultiplier;
+        
+        Config.DensityValues[CornerIndex] = SampleDensityInterpolated(FluidChunk, ChunkManager, LocalPos);
+        
+        if (Config.DensityValues[CornerIndex] > 0.0f)
+            bHasValidDensity = true;
+    }
+    
+    if (bHasValidDensity)
+    {
+        GenerateCube(Config, IsoLevel, OutVertices, OutTriangles);
     }
 }

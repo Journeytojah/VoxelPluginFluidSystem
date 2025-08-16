@@ -851,7 +851,7 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 			float TimeSinceUpdate = LastUpdateTime ? (CurrentTime - *LastUpdateTime) : 999.0f;
 			
 			// Only consider update if enough time has passed and chunk is dirty
-			if (TimeSinceUpdate > 0.5f && Chunk->ShouldRegenerateMesh())
+			if (TimeSinceUpdate > MinTimeBetweenMeshUpdates && Chunk->ShouldRegenerateMesh())
 			{
 				ChunksNeedingMeshUpdate.Add(Chunk);
 			}

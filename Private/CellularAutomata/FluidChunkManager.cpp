@@ -820,9 +820,9 @@ void UFluidChunkManager::SynchronizeChunkBorders()
 			UFluidChunk* Neighbor = GetChunk(NeighborCoord);
 			if (Neighbor && Neighbor->State == EChunkState::Active)
 			{
-				// Process bidirectional flow between chunks
+				// Process flow only once per chunk pair
+				// The ProcessCrossChunkFlow function handles bidirectional flow internally
 				ProcessCrossChunkFlow(Chunk, Neighbor, 0.016f);
-				ProcessCrossChunkFlow(Neighbor, Chunk, 0.016f);
 				ProcessedPairs.Add(PairKey);
 			}
 		}
@@ -869,34 +869,43 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 					FCAFluidCell& CellA = ChunkA->NextCells[IdxA]; // Use NextCells for consistency
 					FCAFluidCell& CellB = ChunkB->NextCells[IdxB];
 					
-					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
+					if (!CellA.bIsSolid && !CellB.bIsSolid)
 					{
 						// Calculate flow based on fluid height difference
 						const float HeightA = CellA.TerrainHeight + CellA.FluidLevel;
 						const float HeightB = CellB.TerrainHeight + CellB.FluidLevel;
 						const float HeightDiff = HeightA - HeightB;
 						
-						if (HeightDiff > 0.01f)
+						// Allow bidirectional flow - flow from higher to lower
+						if (FMath::Abs(HeightDiff) > 0.01f)
 						{
-							const float SpaceInB = ChunkA->MaxFluidLevel - CellB.FluidLevel;
-							const float PossibleFlow = FMath::Min(CellA.FluidLevel * FlowAmount, HeightDiff * 0.5f);
-							const float ActualFlow = FMath::Min(PossibleFlow, SpaceInB);
+							FCAFluidCell* SourceCell = HeightDiff > 0 ? &CellA : &CellB;
+							FCAFluidCell* TargetCell = HeightDiff > 0 ? &CellB : &CellA;
+							UFluidChunk* SourceChunk = HeightDiff > 0 ? ChunkA : ChunkB;
+							UFluidChunk* TargetChunk = HeightDiff > 0 ? ChunkB : ChunkA;
 							
-							if (ActualFlow > 0.0f)
+							if (SourceCell->FluidLevel > 0.01f)
 							{
-								CellA.FluidLevel -= ActualFlow;
-								CellB.FluidLevel += ActualFlow;
+								const float SpaceInTarget = SourceChunk->MaxFluidLevel - TargetCell->FluidLevel;
+								const float PossibleFlow = FMath::Min(SourceCell->FluidLevel * FlowAmount, FMath::Abs(HeightDiff) * 0.5f);
+								const float ActualFlow = FMath::Min(PossibleFlow, SpaceInTarget);
 								
-								// Wake up the border cells
-								CellA.bSettled = false;
-								CellA.SettledCounter = 0;
-								CellB.bSettled = false;
-								CellB.SettledCounter = 0;
-								
-								ChunkA->bDirty = true;
-								ChunkB->bDirty = true;
-								ChunkA->ConsiderMeshUpdate(ActualFlow);
-								ChunkB->ConsiderMeshUpdate(ActualFlow);
+								if (ActualFlow > 0.0f)
+								{
+									SourceCell->FluidLevel -= ActualFlow;
+									TargetCell->FluidLevel += ActualFlow;
+									
+									// Wake up the border cells
+									SourceCell->bSettled = false;
+									SourceCell->SettledCounter = 0;
+									TargetCell->bSettled = false;
+									TargetCell->SettledCounter = 0;
+									
+									SourceChunk->bDirty = true;
+									TargetChunk->bDirty = true;
+									SourceChunk->ConsiderMeshUpdate(ActualFlow);
+									TargetChunk->ConsiderMeshUpdate(ActualFlow);
+								}
 							}
 						}
 					}
@@ -919,33 +928,40 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 					FCAFluidCell& CellA = ChunkA->NextCells[IdxA];
 					FCAFluidCell& CellB = ChunkB->NextCells[IdxB];
 					
-					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
+					if (!CellA.bIsSolid && !CellB.bIsSolid)
 					{
 						const float HeightA = CellA.TerrainHeight + CellA.FluidLevel;
 						const float HeightB = CellB.TerrainHeight + CellB.FluidLevel;
 						const float HeightDiff = HeightA - HeightB;
 						
-						if (HeightDiff > 0.01f)
+						if (FMath::Abs(HeightDiff) > 0.01f)
 						{
-							const float SpaceInB = ChunkA->MaxFluidLevel - CellB.FluidLevel;
-							const float PossibleFlow = FMath::Min(CellA.FluidLevel * FlowAmount, HeightDiff * 0.5f);
-							const float ActualFlow = FMath::Min(PossibleFlow, SpaceInB);
+							FCAFluidCell* SourceCell = HeightDiff > 0 ? &CellA : &CellB;
+							FCAFluidCell* TargetCell = HeightDiff > 0 ? &CellB : &CellA;
+							UFluidChunk* SourceChunk = HeightDiff > 0 ? ChunkA : ChunkB;
+							UFluidChunk* TargetChunk = HeightDiff > 0 ? ChunkB : ChunkA;
 							
-							if (ActualFlow > 0.0f)
+							if (SourceCell->FluidLevel > 0.01f)
 							{
-								CellA.FluidLevel -= ActualFlow;
-								CellB.FluidLevel += ActualFlow;
+								const float SpaceInTarget = SourceChunk->MaxFluidLevel - TargetCell->FluidLevel;
+								const float PossibleFlow = FMath::Min(SourceCell->FluidLevel * FlowAmount, FMath::Abs(HeightDiff) * 0.5f);
+								const float ActualFlow = FMath::Min(PossibleFlow, SpaceInTarget);
 								
-								// Wake up the border cells
-								CellA.bSettled = false;
-								CellA.SettledCounter = 0;
-								CellB.bSettled = false;
-								CellB.SettledCounter = 0;
-								
-								ChunkA->bDirty = true;
-								ChunkB->bDirty = true;
-								ChunkA->ConsiderMeshUpdate(ActualFlow);
-								ChunkB->ConsiderMeshUpdate(ActualFlow);
+								if (ActualFlow > 0.0f)
+								{
+									SourceCell->FluidLevel -= ActualFlow;
+									TargetCell->FluidLevel += ActualFlow;
+									
+									SourceCell->bSettled = false;
+									SourceCell->SettledCounter = 0;
+									TargetCell->bSettled = false;
+									TargetCell->SettledCounter = 0;
+									
+									SourceChunk->bDirty = true;
+									TargetChunk->bDirty = true;
+									SourceChunk->ConsiderMeshUpdate(ActualFlow);
+									TargetChunk->ConsiderMeshUpdate(ActualFlow);
+								}
 							}
 						}
 					}
@@ -968,33 +984,40 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 					FCAFluidCell& CellA = ChunkA->NextCells[IdxA];
 					FCAFluidCell& CellB = ChunkB->NextCells[IdxB];
 					
-					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
+					if (!CellA.bIsSolid && !CellB.bIsSolid)
 					{
 						const float HeightA = CellA.TerrainHeight + CellA.FluidLevel;
 						const float HeightB = CellB.TerrainHeight + CellB.FluidLevel;
 						const float HeightDiff = HeightA - HeightB;
 						
-						if (HeightDiff > 0.01f)
+						if (FMath::Abs(HeightDiff) > 0.01f)
 						{
-							const float SpaceInB = ChunkA->MaxFluidLevel - CellB.FluidLevel;
-							const float PossibleFlow = FMath::Min(CellA.FluidLevel * FlowAmount, HeightDiff * 0.5f);
-							const float ActualFlow = FMath::Min(PossibleFlow, SpaceInB);
+							FCAFluidCell* SourceCell = HeightDiff > 0 ? &CellA : &CellB;
+							FCAFluidCell* TargetCell = HeightDiff > 0 ? &CellB : &CellA;
+							UFluidChunk* SourceChunk = HeightDiff > 0 ? ChunkA : ChunkB;
+							UFluidChunk* TargetChunk = HeightDiff > 0 ? ChunkB : ChunkA;
 							
-							if (ActualFlow > 0.0f)
+							if (SourceCell->FluidLevel > 0.01f)
 							{
-								CellA.FluidLevel -= ActualFlow;
-								CellB.FluidLevel += ActualFlow;
+								const float SpaceInTarget = SourceChunk->MaxFluidLevel - TargetCell->FluidLevel;
+								const float PossibleFlow = FMath::Min(SourceCell->FluidLevel * FlowAmount, FMath::Abs(HeightDiff) * 0.5f);
+								const float ActualFlow = FMath::Min(PossibleFlow, SpaceInTarget);
 								
-								// Wake up the border cells
-								CellA.bSettled = false;
-								CellA.SettledCounter = 0;
-								CellB.bSettled = false;
-								CellB.SettledCounter = 0;
-								
-								ChunkA->bDirty = true;
-								ChunkB->bDirty = true;
-								ChunkA->ConsiderMeshUpdate(ActualFlow);
-								ChunkB->ConsiderMeshUpdate(ActualFlow);
+								if (ActualFlow > 0.0f)
+								{
+									SourceCell->FluidLevel -= ActualFlow;
+									TargetCell->FluidLevel += ActualFlow;
+									
+									SourceCell->bSettled = false;
+									SourceCell->SettledCounter = 0;
+									TargetCell->bSettled = false;
+									TargetCell->SettledCounter = 0;
+									
+									SourceChunk->bDirty = true;
+									TargetChunk->bDirty = true;
+									SourceChunk->ConsiderMeshUpdate(ActualFlow);
+									TargetChunk->ConsiderMeshUpdate(ActualFlow);
+								}
 							}
 						}
 					}
@@ -1017,33 +1040,40 @@ void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk*
 					FCAFluidCell& CellA = ChunkA->NextCells[IdxA];
 					FCAFluidCell& CellB = ChunkB->NextCells[IdxB];
 					
-					if (!CellA.bIsSolid && !CellB.bIsSolid && CellA.FluidLevel > 0.01f)
+					if (!CellA.bIsSolid && !CellB.bIsSolid)
 					{
 						const float HeightA = CellA.TerrainHeight + CellA.FluidLevel;
 						const float HeightB = CellB.TerrainHeight + CellB.FluidLevel;
 						const float HeightDiff = HeightA - HeightB;
 						
-						if (HeightDiff > 0.01f)
+						if (FMath::Abs(HeightDiff) > 0.01f)
 						{
-							const float SpaceInB = ChunkA->MaxFluidLevel - CellB.FluidLevel;
-							const float PossibleFlow = FMath::Min(CellA.FluidLevel * FlowAmount, HeightDiff * 0.5f);
-							const float ActualFlow = FMath::Min(PossibleFlow, SpaceInB);
+							FCAFluidCell* SourceCell = HeightDiff > 0 ? &CellA : &CellB;
+							FCAFluidCell* TargetCell = HeightDiff > 0 ? &CellB : &CellA;
+							UFluidChunk* SourceChunk = HeightDiff > 0 ? ChunkA : ChunkB;
+							UFluidChunk* TargetChunk = HeightDiff > 0 ? ChunkB : ChunkA;
 							
-							if (ActualFlow > 0.0f)
+							if (SourceCell->FluidLevel > 0.01f)
 							{
-								CellA.FluidLevel -= ActualFlow;
-								CellB.FluidLevel += ActualFlow;
+								const float SpaceInTarget = SourceChunk->MaxFluidLevel - TargetCell->FluidLevel;
+								const float PossibleFlow = FMath::Min(SourceCell->FluidLevel * FlowAmount, FMath::Abs(HeightDiff) * 0.5f);
+								const float ActualFlow = FMath::Min(PossibleFlow, SpaceInTarget);
 								
-								// Wake up the border cells
-								CellA.bSettled = false;
-								CellA.SettledCounter = 0;
-								CellB.bSettled = false;
-								CellB.SettledCounter = 0;
-								
-								ChunkA->bDirty = true;
-								ChunkB->bDirty = true;
-								ChunkA->ConsiderMeshUpdate(ActualFlow);
-								ChunkB->ConsiderMeshUpdate(ActualFlow);
+								if (ActualFlow > 0.0f)
+								{
+									SourceCell->FluidLevel -= ActualFlow;
+									TargetCell->FluidLevel += ActualFlow;
+									
+									SourceCell->bSettled = false;
+									SourceCell->SettledCounter = 0;
+									TargetCell->bSettled = false;
+									TargetCell->SettledCounter = 0;
+									
+									SourceChunk->bDirty = true;
+									TargetChunk->bDirty = true;
+									SourceChunk->ConsiderMeshUpdate(ActualFlow);
+									TargetChunk->ConsiderMeshUpdate(ActualFlow);
+								}
 							}
 						}
 					}

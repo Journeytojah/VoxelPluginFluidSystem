@@ -1126,27 +1126,42 @@ void UFluidChunk::ConsiderMeshUpdate(float FluidChange)
 	if (AccumulatedMeshChange > MeshChangeThreshold)
 	{
 		bMeshDataDirty = true;
+		// Reset accumulation when threshold is reached
+		AccumulatedMeshChange = 0.0f;
+	}
+	
+	// For any change at chunk boundaries, mark dirty immediately for seamless rendering
+	if (FluidChange > 0.001f && bBorderDirty)
+	{
+		bMeshDataDirty = true;
 	}
 	
 	// Also mark dirty if it's been too long since last update (prevent stale meshes)
 	const float CurrentTime = FPlatformTime::Seconds();
-	if (CurrentTime - LastMeshUpdateTime > 5.0f) // Force update every 5 seconds
+	if (CurrentTime - LastMeshUpdateTime > 2.0f) // Force update every 2 seconds (reduced from 5)
 	{
 		bMeshDataDirty = true;
+		AccumulatedMeshChange = 0.0f;
 	}
 }
 
 bool UFluidChunk::ShouldRegenerateMesh() const
 {
+	// Always regenerate if border is dirty (for seamless cross-chunk rendering)
+	if (bMeshDataDirty && bBorderDirty)
+	{
+		return true;
+	}
+	
 	// Don't regenerate if chunk is mostly settled
 	const float SettledRatio = GetSettledCellCount() / (float)FMath::Max(1, GetActiveCellCount());
-	if (SettledRatio > 0.8f && AccumulatedMeshChange < MeshChangeThreshold)
+	if (SettledRatio > 0.9f && AccumulatedMeshChange < MeshChangeThreshold * 0.5f)
 	{
 		return false; // Chunk is mostly settled, don't regenerate unless changes are significant
 	}
 	
-	// Always regenerate if marked dirty and changes are significant
-	return bMeshDataDirty && (AccumulatedMeshChange > MeshChangeThreshold * 0.5f);
+	// Regenerate if marked dirty (removed the accumulated change requirement as it was too restrictive)
+	return bMeshDataDirty;
 }
 
 int32 UFluidChunk::GetSettledCellCount() const

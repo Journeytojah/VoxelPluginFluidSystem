@@ -326,7 +326,10 @@ public:
 	// Mesh optimization
 	float LastMeshChangeAmount = 0.0f;
 	float AccumulatedMeshChange = 0.0f;
-	float MeshChangeThreshold = 0.05f; // Only regenerate if > 5% change
+	
+	UPROPERTY(EditAnywhere, Category = "Mesh Generation", meta = (ClampMin = "0.001", ClampMax = "0.5"))
+	float MeshChangeThreshold = 0.01f; // Only regenerate if > 1% change (reduced from 5% for better responsiveness)
+	
 	int32 SettledCellCount = 0;
 	float LastMeshUpdateTime = 0.0f;
 	

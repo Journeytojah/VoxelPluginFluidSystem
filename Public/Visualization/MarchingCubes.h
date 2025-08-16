@@ -141,6 +141,22 @@ public:
                                        int32 ResolutionMultiplier,
                                        TArray<FMarchingCubesVertex>& OutVertices,
                                        TArray<FMarchingCubesTriangle>& OutTriangles);
+    
+    /**
+     * Generate boundary stitching mesh to fill gaps between chunks
+     * @param FluidChunk - The chunk containing fluid density data
+     * @param ChunkManager - Manager for accessing neighboring chunks
+     * @param IsoLevel - The density threshold for surface generation
+     * @param ResolutionMultiplier - Multiplier for mesh resolution
+     * @param OutVertices - Generated vertices
+     * @param OutTriangles - Generated triangles
+     */
+    static void GenerateChunkBoundaryStitching(class UFluidChunk* FluidChunk,
+                                             class UFluidChunkManager* ChunkManager,
+                                             float IsoLevel,
+                                             int32 ResolutionMultiplier,
+                                             TArray<FMarchingCubesVertex>& OutVertices,
+                                             TArray<FMarchingCubesTriangle>& OutTriangles);
 
 private:
     /**
@@ -181,4 +197,17 @@ private:
      */
     static float SampleDensityInterpolated(class UFluidChunk* FluidChunk, class UFluidChunkManager* ChunkManager,
                                          const FVector& LocalPosition);
+    
+    /**
+     * Process a single boundary cube for mesh generation
+     */
+    static void ProcessBoundaryCube(class UFluidChunk* FluidChunk,
+                                  class UFluidChunkManager* ChunkManager,
+                                  int32 X, int32 Y, int32 Z,
+                                  int32 ResolutionMultiplier,
+                                  float HighResCellSize,
+                                  const FVector& ChunkOrigin,
+                                  float IsoLevel,
+                                  TArray<FMarchingCubesVertex>& OutVertices,
+                                  TArray<FMarchingCubesTriangle>& OutTriangles);
 };

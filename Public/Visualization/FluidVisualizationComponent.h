@@ -138,6 +138,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "0.001", ClampMax = "0.1"))
 	float MaxMeshGenerationTimePerFrame = 0.008f; // 8ms budget
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "0.016", ClampMax = "1.0"))
+	float MinTimeBetweenMeshUpdates = 0.033f; // Minimum time between mesh updates for a chunk (30 FPS default)
+
 private:
 	UPROPERTY()
 	UCAFluidGrid* FluidGrid;
@@ -185,9 +188,10 @@ private:
 	// Optimization: Track chunks that need mesh updates
 	TSet<UFluidChunk*> ChunksNeedingMeshUpdate;
 	TMap<UFluidChunk*, float> ChunkLastMeshUpdateTime;
+	UPROPERTY(EditAnywhere)
 	float ChunkMeshCheckInterval = 0.1f; // Check chunks less frequently
 	float ChunkMeshCheckTimer = 0.0f;
-	int32 MaxChunksToUpdatePerFrame = 3; // Limit mesh updates per frame
+	int32 MaxChunksToUpdatePerFrame = 30; // Limit mesh updates per frame
 	
 	// Async mesh generation
 	struct FAsyncMeshGenerationTask
