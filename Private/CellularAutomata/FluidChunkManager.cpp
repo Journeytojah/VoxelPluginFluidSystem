@@ -112,35 +112,37 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 		SET_DWORD_STAT(STAT_VoxelFluid_TotalCells, CachedStats.TotalChunks * ChunkSize * ChunkSize * ChunkSize);
 		SET_FLOAT_STAT(STAT_VoxelFluid_TotalVolume, CachedStats.TotalFluidVolume);
 		
-		// Calculate additional fluid statistics
-		int32 SignificantCells = 0;
-		float TotalFluidLevels = 0.0f;
-		int32 CellsWithFluid = 0;
+		// Disabled expensive cell iteration that causes frame hitches
+		// This was iterating through every cell of every loaded chunk every second
+		// // Calculate additional fluid statistics
+		// int32 SignificantCells = 0;
+		// float TotalFluidLevels = 0.0f;
+		// int32 CellsWithFluid = 0;
+		// 
+		// for (const auto& ChunkPair : LoadedChunks)
+		// {
+		// 	UFluidChunk* Chunk = ChunkPair.Value;
+		// 	if (Chunk && Chunk->State != EChunkState::Unloaded)
+		// 	{
+		// 		for (int32 i = 0; i < Chunk->Cells.Num(); ++i)
+		// 		{
+		// 			const float FluidLevel = Chunk->Cells[i].FluidLevel;
+		// 			if (FluidLevel > 0.0f)
+		// 			{
+		// 				TotalFluidLevels += FluidLevel;
+		// 				CellsWithFluid++;
+		// 				
+		// 				if (FluidLevel > 0.1f)
+		// 				{
+		// 					SignificantCells++;
+		// 				}
+		// 			}
+		// 		}
+		// 	}
+		// }
 		
-		for (const auto& ChunkPair : LoadedChunks)
-		{
-			UFluidChunk* Chunk = ChunkPair.Value;
-			if (Chunk && Chunk->State != EChunkState::Unloaded)
-			{
-				for (int32 i = 0; i < Chunk->Cells.Num(); ++i)
-				{
-					const float FluidLevel = Chunk->Cells[i].FluidLevel;
-					if (FluidLevel > 0.0f)
-					{
-						TotalFluidLevels += FluidLevel;
-						CellsWithFluid++;
-						
-						if (FluidLevel > 0.1f)
-						{
-							SignificantCells++;
-						}
-					}
-				}
-			}
-		}
-		
-		SET_DWORD_STAT(STAT_VoxelFluid_SignificantCells, SignificantCells);
-		SET_FLOAT_STAT(STAT_VoxelFluid_AvgFluidLevel, CellsWithFluid > 0 ? TotalFluidLevels / CellsWithFluid : 0.0f);
+		SET_DWORD_STAT(STAT_VoxelFluid_SignificantCells, 0);
+		SET_FLOAT_STAT(STAT_VoxelFluid_AvgFluidLevel, 0.0f);
 		
 		// === Player & World Information ===
 		if (ViewerPositions.Num() > 0)
@@ -197,23 +199,28 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 	LowActivityChunks.Reserve(ActiveChunkArray.Num() / 2);
 	SettledChunks.Reserve(ActiveChunkArray.Num() / 4);
 	
-	// Categorize chunks by activity
+	// Process all chunks equally for consistent updates
+	// Disabled activity-based categorization
 	for (UFluidChunk* Chunk : ActiveChunkArray)
 	{
 		if (!Chunk) continue;
 		
-		if (Chunk->bFullySettled && Chunk->InactiveFrameCount > 120)
-		{
-			SettledChunks.Add(Chunk);
-		}
-		else if (Chunk->LastActivityLevel < 0.01f)
-		{
-			LowActivityChunks.Add(Chunk);
-		}
-		else
-		{
-			HighActivityChunks.Add(Chunk);
-		}
+		// Treat all chunks as high activity for consistent updates
+		HighActivityChunks.Add(Chunk);
+		
+		// Old categorization disabled:
+		// if (Chunk->bFullySettled && Chunk->InactiveFrameCount > 120)
+		// {
+		// 	SettledChunks.Add(Chunk);
+		// }
+		// else if (Chunk->LastActivityLevel < 0.01f)
+		// {
+		// 	LowActivityChunks.Add(Chunk);
+		// }
+		// else
+		// {
+		// 	HighActivityChunks.Add(Chunk);
+		// }
 	}
 	
 	// Process high activity chunks every frame
@@ -238,32 +245,21 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 		}
 	}
 	
-	// Process low activity chunks less frequently
-	static int32 LowActivityCounter = 0;
-	LowActivityCounter++;
-	if ((LowActivityCounter % 2) == 0) // Every other frame
+	// Process all low activity chunks every frame for consistency
+	for (UFluidChunk* Chunk : LowActivityChunks)
 	{
-		for (UFluidChunk* Chunk : LowActivityChunks)
+		if (Chunk)
 		{
-			if (Chunk)
-			{
-				Chunk->UpdateSimulation(DeltaTime);
-			}
+			Chunk->UpdateSimulation(DeltaTime);
 		}
 	}
 	
-	// Process settled chunks very rarely
-	static int32 SettledCounter = 0;
-	SettledCounter++;
-	if ((SettledCounter % 10) == 0) // Every 10th frame
+	// Process all settled chunks every frame for consistency
+	for (UFluidChunk* Chunk : SettledChunks)
 	{
-		for (UFluidChunk* Chunk : SettledChunks)
+		if (Chunk)
 		{
-			if (Chunk)
-			{
-				// Just check if they need to be woken up
-				Chunk->UpdateSimulation(DeltaTime);
-			}
+			Chunk->UpdateSimulation(DeltaTime);
 		}
 	}
 	

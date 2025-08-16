@@ -115,19 +115,20 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_UpdateSimulation);
 	
 	// Early exit if chunk is fully settled and has no activity
-	if (bFullySettled && InactiveFrameCount > 60) // Skip after 1 second of inactivity
-	{
-		InactiveFrameCount++;
-		return;
-	}
+	// Disabled aggressive settling to maintain fluid responsiveness
+	// if (bFullySettled && InactiveFrameCount > 300) // Skip after 5 seconds of inactivity
+	// {
+	// 	InactiveFrameCount++;
+	// 	return;
+	// }
 	
-	// Check if we should skip this frame based on hierarchical update frequency
-	static int32 FrameCounter = 0;
-	FrameCounter++;
-	if (UpdateFrequency > 1 && (FrameCounter % UpdateFrequency) != 0)
-	{
-		return;
-	}
+	// Disabled frequency skipping to maintain fluid responsiveness
+	// static int32 FrameCounter = 0;
+	// FrameCounter++;
+	// if (UpdateFrequency > 1 && (FrameCounter % UpdateFrequency) != 0)
+	// {
+	// 	return;
+	// }
 	
 	// Track total fluid change for mesh update decision
 	float TotalFluidChange = 0.0f;
@@ -138,24 +139,17 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	
 	NextCells = Cells;
 	
+	// Simplified simulation without settling-related functions
 	if (CurrentLOD == 0)
 	{
-		// Full quality simulation with enhanced features
-		CalculateHydrostaticPressure();
-		DetectAndMarkPools(DeltaTime);
-		
+		// Full quality simulation
 		ApplyGravity(DeltaTime);
-		ApplyUpwardPressureFlow(DeltaTime);
 		ApplyFlowRules(DeltaTime);
-		ApplyDiagonalFlow(DeltaTime);
-		ApplyPressureEqualization(DeltaTime);
 		ApplyPressure(DeltaTime);
-		UpdateVelocities(DeltaTime);
 	}
 	else if (CurrentLOD == 1)
 	{
 		// Reduced quality simulation
-		CalculateHydrostaticPressure();
 		ApplyGravity(DeltaTime * 0.5f);
 		ApplyFlowRules(DeltaTime * 0.5f);
 		ApplyPressure(DeltaTime);
@@ -203,22 +197,25 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 		InactiveFrameCount = 0;
 	}
 	
-	// Check if chunk is fully settled
-	bFullySettled = (FluidCellCount > 0) && (SettledCount == FluidCellCount);
+	// Removed settling logic
+	bFullySettled = false; // Never consider chunks as fully settled
 	
-	// Adjust update frequency based on activity level
-	if (TotalFluidActivity < 0.001f && bFullySettled)
-	{
-		UpdateFrequency = 4; // Very low activity, update every 4th frame
-	}
-	else if (TotalFluidActivity < 0.01f)
-	{
-		UpdateFrequency = 2; // Low activity, update every other frame
-	}
-	else
-	{
-		UpdateFrequency = 1; // Normal activity, update every frame
-	}
+	// Always update every frame
+	UpdateFrequency = 1;
+	
+	// Old logic disabled:
+	// if (TotalFluidActivity < 0.001f && bFullySettled)
+	// {
+	// 	UpdateFrequency = 4; // Very low activity, update every 4th frame
+	// }
+	// else if (TotalFluidActivity < 0.01f)
+	// {
+	// 	UpdateFrequency = 2; // Low activity, update every other frame
+	// }
+	// else
+	// {
+	// 	UpdateFrequency = 1; // Normal activity, update every frame
+	// }
 	
 	// Only consider mesh update if there was significant change
 	if (TotalFluidChange > 0.001f)
@@ -529,7 +526,9 @@ bool UFluidChunk::IsInLODRange(const FVector& ViewerPosition, float LODDistance)
 
 void UFluidChunk::SetLODLevel(int32 NewLODLevel)
 {
-	CurrentLOD = FMath::Clamp(NewLODLevel, 0, 2);
+	// Force LOD 0 for all chunks to ensure full speed simulation
+	CurrentLOD = 0; // Ignore requested LOD, always use full quality
+	// CurrentLOD = FMath::Clamp(NewLODLevel, 0, 2);
 }
 
 void UFluidChunk::ClearChunk()
@@ -834,65 +833,7 @@ void UFluidChunk::ApplyPressure(float DeltaTime)
 	}
 }
 
-void UFluidChunk::UpdateVelocities(float DeltaTime)
-{
-	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_UpdateVelocities);
-	
-	// Update settled states based on whether fluid level changed
-	for (int32 z = 0; z < ChunkSize; ++z)
-	{
-		for (int32 y = 0; y < ChunkSize; ++y)
-		{
-			for (int32 x = 0; x < ChunkSize; ++x)
-			{
-				const int32 i = GetLocalCellIndex(x, y, z);
-				if (i == -1)
-					continue;
-					
-				FCAFluidCell& Cell = NextCells[i];
-				
-				if (Cell.FluidLevel <= MinFluidLevel || Cell.bIsSolid)
-				{
-					Cell.bSettled = false;
-					Cell.SettledCounter = 0;
-					continue;
-				}
-				
-				// Check if fluid level is stable
-				const float Change = FMath::Abs(Cell.FluidLevel - Cell.LastFluidLevel);
-				
-				// Border cells need more careful settling detection
-				bool bIsBorderCell = (x == 0 || x == ChunkSize - 1 || 
-									  y == 0 || y == ChunkSize - 1 || 
-									  z == 0 || z == ChunkSize - 1);
-				
-				if (Change < MinFluidLevel)
-				{
-					Cell.SettledCounter++;
-					
-					// Border cells need more time to settle
-					int32 RequiredSettleCount = bIsBorderCell ? 10 : 5;
-					
-					if (Cell.SettledCounter >= RequiredSettleCount)
-					{
-						Cell.bSettled = true;
-					}
-				}
-				else
-				{
-					Cell.bSettled = false;
-					Cell.SettledCounter = 0;
-					
-					// If a border cell becomes unsettled, mark chunk border as dirty
-					if (bIsBorderCell)
-					{
-						bBorderDirty = true;
-					}
-				}
-			}
-		}
-	}
-}
+// UpdateVelocities removed - was part of settling system
 
 void UFluidChunk::ProcessBorderFlow(float DeltaTime)
 {
@@ -986,20 +927,7 @@ uint32 UFluidChunk::CalculateFluidStateHash() const
 	return Hash;
 }
 
-void UFluidChunk::CalculateHydrostaticPressure()
-{
-	// Simplified - no pressure calculation needed for basic CA
-	// Method kept for interface compatibility
-}
-
-void UFluidChunk::DetectAndMarkPools(float DeltaTime)
-{
-	// Store previous state for settling detection
-	for (FCAFluidCell& Cell : Cells)
-	{
-		Cell.LastFluidLevel = Cell.FluidLevel;
-	}
-}
+// Removed settling-related functions: CalculateHydrostaticPressure, DetectAndMarkPools, ApplyUpwardPressureFlow
 
 void UFluidChunk::ApplyUpwardPressureFlow(float DeltaTime)
 {
@@ -1043,78 +971,81 @@ void UFluidChunk::ApplyUpwardPressureFlow(float DeltaTime)
 	}
 }
 
-void UFluidChunk::ApplyDiagonalFlow(float DeltaTime)
-{
-	// Simplified - diagonal flow handled in main horizontal flow for simplicity
-	// Method kept for interface compatibility
-}
+// Removed ApplyDiagonalFlow and ApplyPressureEqualization - part of settling system
 
 void UFluidChunk::ApplyPressureEqualization(float DeltaTime)
 {
-	// Equalize water levels in settled regions for stable pools
-	for (int32 z = 0; z < ChunkSize; ++z)
-	{
-		for (int32 y = 0; y < ChunkSize; ++y)
-		{
-			for (int32 x = 0; x < ChunkSize; ++x)
-			{
-				const int32 CurrentIdx = GetLocalCellIndex(x, y, z);
-				if (CurrentIdx == -1)
-					continue;
-				
-				FCAFluidCell& CurrentCell = NextCells[CurrentIdx];
-				
-				// Skip if no water or not settled
-				if (CurrentCell.FluidLevel <= MinFluidLevel || !CurrentCell.bSettled || CurrentCell.bIsSolid)
-					continue;
-				
-				// Find connected neighbors at same level
-				const int32 Neighbors[4][2] = {
-					{x + 1, y},
-					{x - 1, y},
-					{x, y + 1},
-					{x, y - 1}
-				};
-				
-				float TotalLevel = CurrentCell.FluidLevel;
-				int32 ConnectedCount = 1;
-				TArray<int32> ConnectedCells;
-				
-				for (int32 i = 0; i < 4; ++i)
-				{
-					const int32 nx = Neighbors[i][0];
-					const int32 ny = Neighbors[i][1];
-					
-					if (IsValidLocalCell(nx, ny, z))
-					{
-						const int32 NeighborIdx = GetLocalCellIndex(nx, ny, z);
-						FCAFluidCell& NeighborCell = NextCells[NeighborIdx];
-						
-						if (!NeighborCell.bIsSolid && NeighborCell.bSettled && NeighborCell.FluidLevel > MinFluidLevel)
-						{
-							ConnectedCells.Add(NeighborIdx);
-							TotalLevel += NeighborCell.FluidLevel;
-							ConnectedCount++;
-						}
-					}
-				}
-				
-				// Set all connected cells to average level
-				if (ConnectedCount > 1)
-				{
-					const float AverageLevel = TotalLevel / ConnectedCount;
-					const float AdjustmentRate = 0.5f * DeltaTime;
-					
-					CurrentCell.FluidLevel = FMath::Lerp(CurrentCell.FluidLevel, AverageLevel, AdjustmentRate);
-					
-					for (int32 ConnectedIdx : ConnectedCells)
-					{
-						NextCells[ConnectedIdx].FluidLevel = FMath::Lerp(NextCells[ConnectedIdx].FluidLevel, AverageLevel, AdjustmentRate);
-					}
-				}
-			}
-		}
-	}
+	// Disabled - this function was causing slow updates because:
+	// 1. It only processes settled cells (which take 20-30 frames to become settled)
+	// 2. It uses a very slow lerp rate (0.5f * DeltaTime)
+	// 3. This created sluggish fluid movement
+	return;
+	
+	// Original implementation commented out:
+	// // Equalize water levels in settled regions for stable pools
+	// for (int32 z = 0; z < ChunkSize; ++z)
+	// {
+	// 	for (int32 y = 0; y < ChunkSize; ++y)
+	// 	{
+	// 		for (int32 x = 0; x < ChunkSize; ++x)
+	// 		{
+	// 			const int32 CurrentIdx = GetLocalCellIndex(x, y, z);
+	// 			if (CurrentIdx == -1)
+	// 				continue;
+	// 			
+	// 			FCAFluidCell& CurrentCell = NextCells[CurrentIdx];
+	// 			
+	// 			// Skip if no water or not settled
+	// 			if (CurrentCell.FluidLevel <= MinFluidLevel || !CurrentCell.bSettled || CurrentCell.bIsSolid)
+	// 				continue;
+	// 			
+	// 			// Find connected neighbors at same level
+	// 			const int32 Neighbors[4][2] = {
+	// 				{x + 1, y},
+	// 				{x - 1, y},
+	// 				{x, y + 1},
+	// 				{x, y - 1}
+	// 			};
+	// 			
+	// 			float TotalLevel = CurrentCell.FluidLevel;
+	// 			int32 ConnectedCount = 1;
+	// 			TArray<int32> ConnectedCells;
+	// 			
+	// 			for (int32 i = 0; i < 4; ++i)
+	// 			{
+	// 				const int32 nx = Neighbors[i][0];
+	// 				const int32 ny = Neighbors[i][1];
+	// 				
+	// 				if (IsValidLocalCell(nx, ny, z))
+	// 				{
+	// 					const int32 NeighborIdx = GetLocalCellIndex(nx, ny, z);
+	// 					FCAFluidCell& NeighborCell = NextCells[NeighborIdx];
+	// 					
+	// 					if (!NeighborCell.bIsSolid && NeighborCell.bSettled && NeighborCell.FluidLevel > MinFluidLevel)
+	// 					{
+	// 						ConnectedCells.Add(NeighborIdx);
+	// 						TotalLevel += NeighborCell.FluidLevel;
+	// 						ConnectedCount++;
+	// 					}
+	// 				}
+	// 			}
+	// 			
+	// 			// Set all connected cells to average level
+	// 			if (ConnectedCount > 1)
+	// 			{
+	// 				const float AverageLevel = TotalLevel / ConnectedCount;
+	// 				const float AdjustmentRate = 0.5f * DeltaTime;
+	// 				
+	// 				CurrentCell.FluidLevel = FMath::Lerp(CurrentCell.FluidLevel, AverageLevel, AdjustmentRate);
+	// 				
+	// 				for (int32 ConnectedIdx : ConnectedCells)
+	// 				{
+	// 					NextCells[ConnectedIdx].FluidLevel = FMath::Lerp(NextCells[ConnectedIdx].FluidLevel, AverageLevel, AdjustmentRate);
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+	// }
 }
 
 void UFluidChunk::ConsiderMeshUpdate(float FluidChange)
@@ -1147,30 +1078,13 @@ void UFluidChunk::ConsiderMeshUpdate(float FluidChange)
 
 bool UFluidChunk::ShouldRegenerateMesh() const
 {
-	// Always regenerate if border is dirty (for seamless cross-chunk rendering)
-	if (bMeshDataDirty && bBorderDirty)
-	{
-		return true;
-	}
-	
-	// Don't regenerate if chunk is mostly settled
-	const float SettledRatio = GetSettledCellCount() / (float)FMath::Max(1, GetActiveCellCount());
-	if (SettledRatio > 0.9f && AccumulatedMeshChange < MeshChangeThreshold * 0.5f)
-	{
-		return false; // Chunk is mostly settled, don't regenerate unless changes are significant
-	}
-	
-	// Regenerate if marked dirty (removed the accumulated change requirement as it was too restrictive)
+	// Simplified: always regenerate if marked dirty
+	// Removed all settling-based checks that were preventing mesh updates
 	return bMeshDataDirty;
 }
 
 int32 UFluidChunk::GetSettledCellCount() const
 {
-	int32 Count = 0;
-	for (const FCAFluidCell& Cell : Cells)
-	{
-		if (Cell.bSettled && Cell.FluidLevel > MinFluidLevel)
-			Count++;
-	}
-	return Count;
+	// Removed settling system - always return 0
+	return 0;
 }

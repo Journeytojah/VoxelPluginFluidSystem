@@ -72,12 +72,9 @@ void UFluidVisualizationComponent::TickComponent(float DeltaTime, ELevelTick Tic
 		UpdateDensityInterpolation(DeltaTime);
 	}
 	
-	MeshUpdateTimer += DeltaTime;
-	if (MeshUpdateTimer >= MeshUpdateInterval)
-	{
-		MeshUpdateTimer = 0.0f;
-		UpdateVisualization();
-	}
+	// Update visualization every frame for real-time updates
+	// Removed timer check that was causing delayed updates
+	UpdateVisualization();
 	
 	if (bEnableFlowVisualization && GetWorld())
 	{
@@ -833,28 +830,19 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 	int32 LOD1Meshes = 0;
 	int32 LOD2Meshes = 0;
 	
-	// Step 0: Periodically check which chunks need updates
-	ChunkMeshCheckTimer += GetWorld()->GetDeltaSeconds();
-	if (ChunkMeshCheckTimer >= ChunkMeshCheckInterval)
+	// Step 0: Check which chunks need updates EVERY FRAME for real-time updates
+	ChunksNeedingMeshUpdate.Empty();
+	
+	// Check each active chunk to see if it needs an update
+	for (UFluidChunk* Chunk : ActiveChunks)
 	{
-		ChunkMeshCheckTimer = 0.0f;
-		ChunksNeedingMeshUpdate.Empty();
+		if (!Chunk || !ShouldRenderChunk(Chunk, ViewerPos))
+			continue;
 		
-		// Check each active chunk to see if it needs an update
-		for (UFluidChunk* Chunk : ActiveChunks)
+		// Update immediately if chunk is dirty - no timing checks
+		if (Chunk->ShouldRegenerateMesh())
 		{
-			if (!Chunk || !ShouldRenderChunk(Chunk, ViewerPos))
-				continue;
-				
-			// Check if chunk has been updated recently
-			float* LastUpdateTime = ChunkLastMeshUpdateTime.Find(Chunk);
-			float TimeSinceUpdate = LastUpdateTime ? (CurrentTime - *LastUpdateTime) : 999.0f;
-			
-			// Only consider update if enough time has passed and chunk is dirty
-			if (TimeSinceUpdate > MinTimeBetweenMeshUpdates && Chunk->ShouldRegenerateMesh())
-			{
-				ChunksNeedingMeshUpdate.Add(Chunk);
-			}
+			ChunksNeedingMeshUpdate.Add(Chunk);
 		}
 	}
 	
