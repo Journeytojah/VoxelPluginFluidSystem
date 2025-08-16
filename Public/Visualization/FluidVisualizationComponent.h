@@ -129,6 +129,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
 	bool bUseAdaptiveResolution = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
+	bool bUseAsyncMeshGeneration = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "1", ClampMax = "10"))
+	int32 MaxAsyncTasksPerFrame = 2;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "0.001", ClampMax = "0.1"))
+	float MaxMeshGenerationTimePerFrame = 0.008f; // 8ms budget
+
 private:
 	UPROPERTY()
 	UCAFluidGrid* FluidGrid;
@@ -179,4 +188,34 @@ private:
 	float ChunkMeshCheckInterval = 0.1f; // Check chunks less frequently
 	float ChunkMeshCheckTimer = 0.0f;
 	int32 MaxChunksToUpdatePerFrame = 3; // Limit mesh updates per frame
+	
+	// Async mesh generation
+	struct FAsyncMeshGenerationTask
+	{
+		UFluidChunk* Chunk;
+		int32 LODLevel;
+		float IsoLevel;
+		int32 ResolutionMultiplier;
+		TArray<FVector> Vertices;
+		TArray<int32> Triangles;
+		TArray<FVector> Normals;
+		TArray<FVector2D> UVs;
+		TArray<FColor> VertexColors;
+		bool bCompleted;
+		bool bStarted;
+		
+		FAsyncMeshGenerationTask() : Chunk(nullptr), LODLevel(0), IsoLevel(0.01f), 
+		                            ResolutionMultiplier(1), bCompleted(false), bStarted(false) {}
+	};
+	
+	TArray<TSharedPtr<FAsyncMeshGenerationTask>> AsyncMeshTasks;
+	FCriticalSection AsyncTaskMutex;
+	
+	// Performance tracking
+	float CurrentFrameMeshGenTime = 0.0f;
+	int32 AsyncTasksRunningCount = 0;
+	
+	void ProcessAsyncMeshTasks();
+	void StartAsyncMeshGeneration(UFluidChunk* Chunk, int32 LODLevel);
+	void ApplyGeneratedMesh(TSharedPtr<FAsyncMeshGenerationTask> Task);
 };

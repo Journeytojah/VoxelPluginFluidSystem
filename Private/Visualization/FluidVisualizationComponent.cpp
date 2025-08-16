@@ -12,6 +12,8 @@
 #include "Materials/Material.h"
 #include "VoxelFluidStats.h"
 #include "GameFramework/PlayerController.h"
+#include "Async/Async.h"
+#include "Async/TaskGraphInterfaces.h"
 
 UFluidVisualizationComponent::UFluidVisualizationComponent()
 {
@@ -54,6 +56,12 @@ void UFluidVisualizationComponent::BeginPlay()
 void UFluidVisualizationComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	
+	// Process async mesh generation tasks
+	if (bUseAsyncMeshGeneration && RenderMode == EFluidRenderMode::MarchingCubes)
+	{
+		ProcessAsyncMeshTasks();
+	}
 	
 	if (!FluidGrid)
 		return;
@@ -896,9 +904,24 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 	// First process chunks that explicitly need updates
 	for (UFluidChunk* Chunk : ChunksNeedingMeshUpdate)
 	{
-		if (ChunksUpdatedThisFrame >= MaxChunksToUpdatePerFrame)
-			break;
-			
+		// Check async task limit
+		if (bUseAsyncMeshGeneration)
+		{
+			// Limit concurrent async tasks
+			if (AsyncTasksRunningCount >= MaxAsyncTasksPerFrame)
+				break;
+				
+			// Check time budget
+			if (CurrentFrameMeshGenTime >= MaxMeshGenerationTimePerFrame)
+				break;
+		}
+		else
+		{
+			// Sync generation - limit chunks per frame
+			if (ChunksUpdatedThisFrame >= MaxChunksToUpdatePerFrame)
+				break;
+		}
+		
 		if (!Chunk || !ShouldRenderChunk(Chunk, ViewerPos))
 			continue;
 			
@@ -907,100 +930,144 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 		const float Distance = FVector::Dist(ChunkBounds.GetCenter(), ViewerPos);
 		int32 LODLevel = CalculateLODLevel(Distance);
 		
-		// Get or create procedural mesh component for this chunk
-		UProceduralMeshComponent* ChunkMesh = nullptr;
-		
-		if (UProceduralMeshComponent** ExistingMesh = ChunkMarchingCubesMeshes.Find(Chunk))
-		{
-			ChunkMesh = *ExistingMesh;
-		}
-		else
-		{
-			ChunkMesh = NewObject<UProceduralMeshComponent>(GetOwner());
-			ChunkMesh->RegisterComponent();
-			ChunkMesh->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
-			
-			if (FluidMaterial)
-			{
-				ChunkMesh->SetMaterial(0, FluidMaterial);
-			}
-			
-			ChunkMarchingCubesMeshes.Add(Chunk, ChunkMesh);
-		}
-		
 		// Check if we can use cached mesh data first
-		TArray<FVector> Vertices;
-		TArray<int32> Triangles;
-		TArray<FVector> Normals;
-		TArray<FVector2D> UVs;
-		TArray<FColor> VertexColors;
-		
 		bool bUsedCachedMesh = false;
 		
 		// Try to use cached mesh data if available and valid
 		if (Chunk->HasValidMeshData(LODLevel, MarchingCubesIsoLevel))
 		{
-			// Use stored mesh data
+			// Apply cached mesh immediately
 			const FChunkMeshData& StoredData = Chunk->StoredMeshData;
-			Vertices = StoredData.Vertices;
-			Triangles = StoredData.Triangles;
-			Normals = StoredData.Normals;
-			UVs = StoredData.UVs;
-			VertexColors = StoredData.VertexColors;
-			bUsedCachedMesh = true;
-			CachedMeshesUsed++;
+			
+			// Get or create procedural mesh component for this chunk
+			UProceduralMeshComponent* ChunkMesh = nullptr;
+			
+			if (UProceduralMeshComponent** ExistingMesh = ChunkMarchingCubesMeshes.Find(Chunk))
+			{
+				ChunkMesh = *ExistingMesh;
+			}
+			else
+			{
+				ChunkMesh = NewObject<UProceduralMeshComponent>(GetOwner());
+				ChunkMesh->RegisterComponent();
+				ChunkMesh->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
+				
+				if (FluidMaterial)
+				{
+					ChunkMesh->SetMaterial(0, FluidMaterial);
+				}
+				
+				ChunkMarchingCubesMeshes.Add(Chunk, ChunkMesh);
+			}
+			
+			// Apply cached mesh
+			if (ChunkMesh && StoredData.Vertices.Num() > 0)
+			{
+				ChunkMesh->ClearAllMeshSections();
+				ChunkMesh->CreateMeshSection(0, StoredData.Vertices, StoredData.Triangles, 
+				                            StoredData.Normals, StoredData.UVs, StoredData.VertexColors, 
+				                            TArray<FProcMeshTangent>(), bGenerateCollision);
+				RenderedChunks++;
+				CachedMeshesUsed++;
+			}
 		}
 		else
 		{
-			// Generate new mesh data
-			TArray<FMarchingCubes::FMarchingCubesVertex> MarchingVertices;
-			TArray<FMarchingCubes::FMarchingCubesTriangle> MarchingTriangles;
-			
-			GenerateChunkMeshWithLOD(Chunk, LODLevel, MarchingVertices, MarchingTriangles);
-			
-			// Convert to UE4 procedural mesh format
-			if (MarchingVertices.Num() > 0)
+			// Need to generate new mesh data
+			if (bUseAsyncMeshGeneration)
 			{
-				Vertices.Reserve(MarchingVertices.Num());
-				Normals.Reserve(MarchingVertices.Num());
-				UVs.Reserve(MarchingVertices.Num());
-				VertexColors.Reserve(MarchingVertices.Num());
-				Triangles.Reserve(MarchingTriangles.Num() * 3);
+				// Start async generation
+				StartAsyncMeshGeneration(Chunk, LODLevel);
+				MeshesGenerated++;
+			}
+			else
+			{
+				// Synchronous generation (old method)
+				TArray<FVector> Vertices;
+				TArray<int32> Triangles;
+				TArray<FVector> Normals;
+				TArray<FVector2D> UVs;
+				TArray<FColor> VertexColors;
 				
-				// Convert vertices
-				for (const auto& MarchingVertex : MarchingVertices)
+				// Generate new mesh data
+				TArray<FMarchingCubes::FMarchingCubesVertex> MarchingVertices;
+				TArray<FMarchingCubes::FMarchingCubesTriangle> MarchingTriangles;
+				
+				GenerateChunkMeshWithLOD(Chunk, LODLevel, MarchingVertices, MarchingTriangles);
+				
+				// Convert to UE4 procedural mesh format
+				if (MarchingVertices.Num() > 0)
 				{
-					Vertices.Add(MarchingVertex.Position);
-					Normals.Add(bFlipNormals ? -MarchingVertex.Normal : MarchingVertex.Normal);
-					UVs.Add(MarchingVertex.UV);
+					Vertices.Reserve(MarchingVertices.Num());
+					Normals.Reserve(MarchingVertices.Num());
+					UVs.Reserve(MarchingVertices.Num());
+					VertexColors.Reserve(MarchingVertices.Num());
+					Triangles.Reserve(MarchingTriangles.Num() * 3);
 					
-					// Color based on height for visual interest (fade with LOD)
-					const float HeightFactor = FMath::Clamp((MarchingVertex.Position.Z - Chunk->ChunkWorldPosition.Z) / (Chunk->ChunkSize * Chunk->CellSize), 0.0f, 1.0f);
-					FColor VertexColor = FColor::MakeRedToGreenColorFromScalar(HeightFactor);
-					
-					// Fade color with distance/LOD for performance indication
-					if (LODLevel > 0)
+					// Convert vertices
+					for (const auto& MarchingVertex : MarchingVertices)
 					{
-						const float LODFade = FMath::Clamp(1.0f - (LODLevel * 0.2f), 0.5f, 1.0f);
-						VertexColor.R = (uint8)(VertexColor.R * LODFade);
-						VertexColor.G = (uint8)(VertexColor.G * LODFade);
-						VertexColor.B = (uint8)(VertexColor.B * LODFade);
+						Vertices.Add(MarchingVertex.Position);
+						Normals.Add(bFlipNormals ? -MarchingVertex.Normal : MarchingVertex.Normal);
+						UVs.Add(MarchingVertex.UV);
+						
+						// Color based on height for visual interest (fade with LOD)
+						const float HeightFactor = FMath::Clamp((MarchingVertex.Position.Z - Chunk->ChunkWorldPosition.Z) / (Chunk->ChunkSize * Chunk->CellSize), 0.0f, 1.0f);
+						FColor VertexColor = FColor::MakeRedToGreenColorFromScalar(HeightFactor);
+						
+						// Fade color with distance/LOD for performance indication
+						if (LODLevel > 0)
+						{
+							const float LODFade = FMath::Clamp(1.0f - (LODLevel * 0.2f), 0.5f, 1.0f);
+							VertexColor.R = (uint8)(VertexColor.R * LODFade);
+							VertexColor.G = (uint8)(VertexColor.G * LODFade);
+							VertexColor.B = (uint8)(VertexColor.B * LODFade);
+						}
+						
+						VertexColors.Add(VertexColor);
 					}
 					
-					VertexColors.Add(VertexColor);
+					// Convert triangles (correct winding order for upward-facing normals)
+					for (const auto& MarchingTriangle : MarchingTriangles)
+					{
+						Triangles.Add(MarchingTriangle.VertexIndices[0]);
+						Triangles.Add(MarchingTriangle.VertexIndices[1]);
+						Triangles.Add(MarchingTriangle.VertexIndices[2]);
+					}
+					
+					// Store the generated mesh data for persistence
+					Chunk->StoreMeshData(Vertices, Triangles, Normals, UVs, VertexColors, MarchingCubesIsoLevel, LODLevel);
+					MeshesGenerated++;
 				}
 				
-				// Convert triangles (correct winding order for upward-facing normals)
-				for (const auto& MarchingTriangle : MarchingTriangles)
+				// Get or create procedural mesh component for this chunk
+				UProceduralMeshComponent* ChunkMesh = nullptr;
+				
+				if (UProceduralMeshComponent** ExistingMesh = ChunkMarchingCubesMeshes.Find(Chunk))
 				{
-					Triangles.Add(MarchingTriangle.VertexIndices[0]);
-					Triangles.Add(MarchingTriangle.VertexIndices[1]);
-					Triangles.Add(MarchingTriangle.VertexIndices[2]);
+					ChunkMesh = *ExistingMesh;
+				}
+				else
+				{
+					ChunkMesh = NewObject<UProceduralMeshComponent>(GetOwner());
+					ChunkMesh->RegisterComponent();
+					ChunkMesh->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
+					
+					if (FluidMaterial)
+					{
+						ChunkMesh->SetMaterial(0, FluidMaterial);
+					}
+					
+					ChunkMarchingCubesMeshes.Add(Chunk, ChunkMesh);
 				}
 				
-				// Store the generated mesh data for persistence
-				Chunk->StoreMeshData(Vertices, Triangles, Normals, UVs, VertexColors, MarchingCubesIsoLevel, LODLevel);
-				MeshesGenerated++;
+				if (Vertices.Num() > 0)
+				{
+					// Update procedural mesh with newly generated data
+					ChunkMesh->ClearAllMeshSections();
+					ChunkMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UVs, VertexColors, TArray<FProcMeshTangent>(), bGenerateCollision);
+					RenderedChunks++;
+				}
 			}
 		}
 		
@@ -1012,26 +1079,12 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 			case 2: LOD2Meshes++; break;
 		}
 		
-		if (Vertices.Num() > 0)
-		{
-			// Update procedural mesh with either cached or newly generated data
-			ChunkMesh->ClearAllMeshSections();
-			ChunkMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UVs, VertexColors, TArray<FProcMeshTangent>(), bGenerateCollision);
-			RenderedChunks++;
-			
-			// Track that we updated this chunk
-			ChunkLastMeshUpdateTime.Add(Chunk, CurrentTime);
-			ChunksUpdatedThisFrame++;
-			
-			// Remove from pending updates
-			ChunksNeedingMeshUpdate.Remove(Chunk);
-		}
-		else
-		{
-			// No fluid in chunk, clear mesh
-			ChunkMesh->ClearAllMeshSections();
-			ChunkLastMeshUpdateTime.Add(Chunk, CurrentTime);
-		}
+		// Track that we updated this chunk
+		ChunkLastMeshUpdateTime.Add(Chunk, CurrentTime);
+		ChunksUpdatedThisFrame++;
+		
+		// Remove from pending updates
+		ChunksNeedingMeshUpdate.Remove(Chunk);
 	}
 	
 	// Step 3: Also check for chunks that have never been rendered (new chunks)
@@ -1297,4 +1350,234 @@ void UFluidVisualizationComponent::GenerateChunkMeshWithLOD(UFluidChunk* Chunk, 
 			FMarchingCubes::GenerateChunkMesh(Chunk, MarchingCubesIsoLevel * 1.5f, OutVertices, OutTriangles);
 			break;
 	}
+}
+
+void UFluidVisualizationComponent::ProcessAsyncMeshTasks()
+{
+	// Clean up completed tasks and apply their meshes
+	TArray<TSharedPtr<FAsyncMeshGenerationTask>> CompletedTasks;
+	
+	{
+		FScopeLock Lock(&AsyncTaskMutex);
+		
+		// Find completed tasks
+		for (auto It = AsyncMeshTasks.CreateIterator(); It; ++It)
+		{
+			TSharedPtr<FAsyncMeshGenerationTask> Task = *It;
+			if (Task && Task->bCompleted)
+			{
+				CompletedTasks.Add(Task);
+				It.RemoveCurrent();
+				AsyncTasksRunningCount--;
+			}
+		}
+	}
+	
+	// Apply completed meshes on the game thread
+	for (const TSharedPtr<FAsyncMeshGenerationTask>& Task : CompletedTasks)
+	{
+		ApplyGeneratedMesh(Task);
+	}
+	
+	// Reset frame time counter
+	CurrentFrameMeshGenTime = 0.0f;
+}
+
+void UFluidVisualizationComponent::StartAsyncMeshGeneration(UFluidChunk* Chunk, int32 LODLevel)
+{
+	if (!Chunk || !ChunkManager)
+		return;
+	
+	// Check if we already have a task for this chunk
+	{
+		FScopeLock Lock(&AsyncTaskMutex);
+		for (const TSharedPtr<FAsyncMeshGenerationTask>& ExistingTask : AsyncMeshTasks)
+		{
+			if (ExistingTask && ExistingTask->Chunk == Chunk && !ExistingTask->bCompleted)
+			{
+				return; // Task already in progress
+			}
+		}
+	}
+	
+	// Create new async task
+	TSharedPtr<FAsyncMeshGenerationTask> NewTask = MakeShareable(new FAsyncMeshGenerationTask());
+	NewTask->Chunk = Chunk;
+	NewTask->LODLevel = LODLevel;
+	NewTask->IsoLevel = MarchingCubesIsoLevel;
+	
+	// Determine resolution multiplier
+	NewTask->ResolutionMultiplier = MarchingCubesResolutionMultiplier;
+	if (bUseAdaptiveResolution)
+	{
+		NewTask->ResolutionMultiplier = FMath::Max(1, MarchingCubesResolutionMultiplier - LODLevel);
+	}
+	
+	// Add to task queue
+	{
+		FScopeLock Lock(&AsyncTaskMutex);
+		AsyncMeshTasks.Add(NewTask);
+		AsyncTasksRunningCount++;
+	}
+	
+	// Capture necessary data for async generation
+	UFluidChunk* ChunkPtr = Chunk;
+	UFluidChunkManager* ChunkMgrPtr = ChunkManager;
+	int32 ResMultiplier = NewTask->ResolutionMultiplier;
+	float IsoLevel = NewTask->IsoLevel;
+	bool bFlipNorms = bFlipNormals;
+	
+	// Launch async task
+	Async(EAsyncExecution::TaskGraph, [NewTask, ChunkPtr, ChunkMgrPtr, LODLevel, ResMultiplier, IsoLevel, bFlipNorms]()
+	{
+		if (!ChunkPtr || !ChunkMgrPtr)
+		{
+			NewTask->bCompleted = true;
+			return;
+		}
+		
+		NewTask->bStarted = true;
+		
+		// Generate mesh data on background thread
+		TArray<FMarchingCubes::FMarchingCubesVertex> MarchingVertices;
+		TArray<FMarchingCubes::FMarchingCubesTriangle> MarchingTriangles;
+		
+		// Generate based on LOD and resolution
+		switch (LODLevel)
+		{
+			case 0: // Full detail
+				if (ResMultiplier > 1)
+				{
+					FMarchingCubes::GenerateHighResChunkMesh(ChunkPtr, ChunkMgrPtr, IsoLevel, 
+					                                       ResMultiplier, MarchingVertices, MarchingTriangles);
+				}
+				else
+				{
+					FMarchingCubes::GenerateSeamlessChunkMesh(ChunkPtr, ChunkMgrPtr, IsoLevel, 
+					                                        MarchingVertices, MarchingTriangles);
+				}
+				break;
+				
+			case 1: // Medium detail
+				if (ResMultiplier > 1)
+				{
+					FMarchingCubes::GenerateHighResChunkMesh(ChunkPtr, ChunkMgrPtr, IsoLevel * 1.1f, 
+					                                       ResMultiplier, MarchingVertices, MarchingTriangles);
+				}
+				else
+				{
+					FMarchingCubes::GenerateSeamlessChunkMesh(ChunkPtr, ChunkMgrPtr, IsoLevel * 1.2f, 
+					                                        MarchingVertices, MarchingTriangles);
+				}
+				break;
+				
+			case 2: // Low detail
+			default:
+				FMarchingCubes::GenerateChunkMesh(ChunkPtr, IsoLevel * 1.5f, MarchingVertices, MarchingTriangles);
+				break;
+		}
+		
+		// Convert to procedural mesh format
+		if (MarchingVertices.Num() > 0)
+		{
+			NewTask->Vertices.Reserve(MarchingVertices.Num());
+			NewTask->Normals.Reserve(MarchingVertices.Num());
+			NewTask->UVs.Reserve(MarchingVertices.Num());
+			NewTask->VertexColors.Reserve(MarchingVertices.Num());
+			NewTask->Triangles.Reserve(MarchingTriangles.Num() * 3);
+			
+			// Convert vertices
+			for (const auto& MarchingVertex : MarchingVertices)
+			{
+				NewTask->Vertices.Add(MarchingVertex.Position);
+				NewTask->Normals.Add(bFlipNorms ? -MarchingVertex.Normal : MarchingVertex.Normal);
+				NewTask->UVs.Add(MarchingVertex.UV);
+				
+				// Color based on height
+				const float HeightFactor = FMath::Clamp((MarchingVertex.Position.Z - ChunkPtr->ChunkWorldPosition.Z) / 
+				                                      (ChunkPtr->ChunkSize * ChunkPtr->CellSize), 0.0f, 1.0f);
+				FColor VertexColor = FColor::MakeRedToGreenColorFromScalar(HeightFactor);
+				
+				// Fade with LOD
+				if (LODLevel > 0)
+				{
+					const float LODFade = FMath::Clamp(1.0f - (LODLevel * 0.2f), 0.5f, 1.0f);
+					VertexColor.R = (uint8)(VertexColor.R * LODFade);
+					VertexColor.G = (uint8)(VertexColor.G * LODFade);
+					VertexColor.B = (uint8)(VertexColor.B * LODFade);
+				}
+				
+				NewTask->VertexColors.Add(VertexColor);
+			}
+			
+			// Convert triangles
+			for (const auto& MarchingTriangle : MarchingTriangles)
+			{
+				NewTask->Triangles.Add(MarchingTriangle.VertexIndices[0]);
+				NewTask->Triangles.Add(MarchingTriangle.VertexIndices[1]);
+				NewTask->Triangles.Add(MarchingTriangle.VertexIndices[2]);
+			}
+		}
+		
+		// Mark as completed
+		NewTask->bCompleted = true;
+	});
+}
+
+void UFluidVisualizationComponent::ApplyGeneratedMesh(TSharedPtr<FAsyncMeshGenerationTask> Task)
+{
+	if (!Task || !Task->Chunk || Task->Vertices.Num() == 0)
+		return;
+	
+	// Get or create procedural mesh component for this chunk
+	UProceduralMeshComponent* ChunkMesh = nullptr;
+	
+	if (UProceduralMeshComponent** ExistingMesh = ChunkMarchingCubesMeshes.Find(Task->Chunk))
+	{
+		ChunkMesh = *ExistingMesh;
+	}
+	else
+	{
+		ChunkMesh = NewObject<UProceduralMeshComponent>(GetOwner());
+		ChunkMesh->RegisterComponent();
+		ChunkMesh->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
+		
+		if (FluidMaterial)
+		{
+			ChunkMesh->SetMaterial(0, FluidMaterial);
+		}
+		
+		ChunkMarchingCubesMeshes.Add(Task->Chunk, ChunkMesh);
+	}
+	
+	// Apply the mesh
+	if (ChunkMesh)
+	{
+		ChunkMesh->ClearAllMeshSections();
+		
+		if (Task->Vertices.Num() > 0 && Task->Triangles.Num() > 0)
+		{
+			// Create mesh section
+			ChunkMesh->CreateMeshSection(
+				0, // Section index
+				Task->Vertices,
+				Task->Triangles,
+				Task->Normals,
+				Task->UVs,
+				Task->VertexColors,
+				TArray<FProcMeshTangent>(), // Tangents (auto-calculated)
+				bGenerateCollision
+			);
+		}
+		
+		// Update cached mesh data on the chunk
+		if (Task->Chunk)
+		{
+			Task->Chunk->StoreMeshData(Task->Vertices, Task->Triangles, Task->Normals, 
+			                          Task->UVs, Task->VertexColors, Task->IsoLevel, Task->LODLevel);
+		}
+	}
+	
+	// Update last mesh update time
+	ChunkLastMeshUpdateTime.Add(Task->Chunk, FPlatformTime::Seconds());
 }
