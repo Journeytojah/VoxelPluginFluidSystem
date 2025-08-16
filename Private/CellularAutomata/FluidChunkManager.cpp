@@ -163,6 +163,19 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 		SET_FLOAT_STAT(STAT_VoxelFluid_ActiveDistance, StreamingConfig.ActiveDistance);
 		SET_FLOAT_STAT(STAT_VoxelFluid_LoadDistance, StreamingConfig.LoadDistance);
 		SET_DWORD_STAT(STAT_VoxelFluid_CrossChunkFlow, bDebugCrossChunkFlow ? 1 : 0);
+		
+		// === Persistence & Cache Statistics ===
+		SET_DWORD_STAT(STAT_VoxelFluid_CacheEntries, GetCacheSize());
+		SET_DWORD_STAT(STAT_VoxelFluid_CacheMemoryKB, GetCacheMemoryUsage());
+		SET_DWORD_STAT(STAT_VoxelFluid_ChunksSaved, ChunksSavedThisFrame);
+		SET_DWORD_STAT(STAT_VoxelFluid_ChunksLoaded, ChunksLoadedThisFrame);
+		
+		// === Fluid Properties ===
+		SET_FLOAT_STAT(STAT_VoxelFluid_EvaporationRate, EvaporationRate);
+		
+		// Reset frame counters
+		ChunksSavedThisFrame = 0;
+		ChunksLoadedThisFrame = 0;
 	}
 	
 	// Update debug timer (debug drawing is now called externally)
@@ -302,6 +315,7 @@ UFluidChunk* UFluidChunkManager::GetOrCreateChunk(const FFluidChunkCoord& Coord)
 	Chunk->FlowRate = FlowRate;
 	Chunk->Viscosity = Viscosity;
 	Chunk->Gravity = Gravity;
+	Chunk->EvaporationRate = EvaporationRate;
 	
 	LoadedChunks.Add(Coord, Chunk);
 	InactiveChunkCoords.Add(Coord);
@@ -1183,6 +1197,7 @@ void UFluidChunkManager::LoadChunk(const FFluidChunkCoord& Coord)
 				float VolumeBefore = Chunk->GetTotalFluidVolume();
 				Chunk->DeserializeChunkData(PersistentData);
 				float VolumeAfter = Chunk->GetTotalFluidVolume();
+				ChunksLoadedThisFrame++;
 				UE_LOG(LogTemp, Warning, TEXT("PERSISTENCE: Restored chunk %s from cache (Before: %.1f, After: %.1f, Saved: %.1f)"), 
 				       *Coord.ToString(), VolumeBefore, VolumeAfter, PersistentData.TotalFluidVolume);
 			}
@@ -1234,6 +1249,7 @@ void UFluidChunkManager::UnloadChunk(const FFluidChunkCoord& Coord)
 						FChunkPersistentData PersistentData = Chunk->SerializeChunkData();
 						SaveChunkData(Coord, PersistentData);
 						ChunkLastSaveTime.Add(Coord, CurrentTime);
+						ChunksSavedThisFrame++;
 						UE_LOG(LogTemp, Warning, TEXT("PERSISTENCE: Saved chunk %s to cache (%.1f fluid volume, %d cells)"), 
 						       *Coord.ToString(), PersistentData.TotalFluidVolume, PersistentData.NonEmptyCellCount);
 					}
@@ -1414,7 +1430,18 @@ void UFluidChunkManager::DrawDebugChunks(UWorld* World) const
 		switch (Chunk->State)
 		{
 			case EChunkState::Active:
-				ChunkColor = FColor::Green;
+				// Color active chunks based on fluid amount
+				{
+					const float FluidVolume = Chunk->GetTotalFluidVolume();
+					if (FluidVolume > 100.0f)
+						ChunkColor = FColor::Cyan; // Lots of fluid
+					else if (FluidVolume > 10.0f)
+						ChunkColor = FColor::Blue; // Moderate fluid
+					else if (FluidVolume > 0.1f)
+						ChunkColor = FColor::Green; // Some fluid
+					else
+						ChunkColor = FColor(0, 128, 0); // Active but dry
+				}
 				StateText = TEXT("ACTIVE");
 				break;
 			case EChunkState::Inactive:
@@ -1426,7 +1453,7 @@ void UFluidChunkManager::DrawDebugChunks(UWorld* World) const
 				StateText = TEXT("BORDER");
 				break;
 			case EChunkState::Loading:
-				ChunkColor = FColor::Blue;
+				ChunkColor = FColor::Magenta;
 				StateText = TEXT("LOADING");
 				break;
 			case EChunkState::Unloading:
@@ -1457,6 +1484,9 @@ void UFluidChunkManager::DrawDebugChunks(UWorld* World) const
 				LoadTime = CurrentTime - *LoadTimePtr;
 			}
 			
+			// Get LOD level
+			const int32 LODLevel = Chunk->CurrentLOD;
+			
 			// Get state history
 			FString StateHistory = TEXT("No History");
 			if (const FString* HistoryPtr = ChunkStateHistory.Find(Coord))
@@ -1464,19 +1494,28 @@ void UFluidChunkManager::DrawDebugChunks(UWorld* World) const
 				StateHistory = *HistoryPtr;
 			}
 			
+			// Check if chunk has cached mesh data
+			const bool bHasCachedMesh = Chunk->StoredMeshData.bIsValid;
+			const bool bMeshDirty = Chunk->bMeshDataDirty;
+			
 			// Build detailed info string with distance information
 			const FString ChunkInfo = FString::Printf(
 				TEXT("Chunk [%d,%d,%d] (%.0fm)\n")
-				TEXT("State: %s\n")
-				TEXT("LOD: %d | Cells: %d\n")
-				TEXT("Fluid: %.2f units\n")
+				TEXT("State: %s | LOD: %d\n")
+				TEXT("Fluid: %.2f units | Cells: %d\n")
+				TEXT("Activity: %.4f | Evap: %.3f/s\n")
+				TEXT("Mesh: %s%s\n")
 				TEXT("Load Time: %.1fs\n")
 				TEXT("%s"),
 				Coord.X, Coord.Y, Coord.Z, Distance,
 				*StateText,
-				Chunk->CurrentLOD,
-				Chunk->GetActiveCellCount(),
+				LODLevel,
 				Chunk->GetTotalFluidVolume(),
+				Chunk->GetActiveCellCount(),
+				Chunk->TotalFluidActivity,
+				Chunk->EvaporationRate,
+				bHasCachedMesh ? TEXT("Cached") : TEXT("None"),
+				bMeshDirty ? TEXT(" [DIRTY]") : TEXT(""),
 				LoadTime,
 				*StateHistory
 			);

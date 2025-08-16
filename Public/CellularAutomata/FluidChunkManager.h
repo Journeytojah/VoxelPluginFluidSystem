@@ -130,6 +130,7 @@ public:
 	FChunkManagerStats GetStats() const;
 	
 	void SetStreamingConfig(const FChunkStreamingConfig& NewConfig);
+	const FChunkStreamingConfig& GetStreamingConfig() const { return StreamingConfig; }
 	
 	void ForceUpdateChunkStates();
 	
@@ -189,6 +190,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
 	float Gravity = 981.0f;
 	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float EvaporationRate = 0.0f;
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bShowChunkBorders = false;
 	
@@ -233,6 +237,10 @@ protected:
 	// Fluid freeze state for chunk operations
 	bool bFreezeFluidForChunkOps = false;
 	float ChunkOpsFreezeTimer = 0.0f;
+	
+	// Statistics tracking
+	int32 ChunksSavedThisFrame = 0;
+	int32 ChunksLoadedThisFrame = 0;
 	
 	TQueue<FFluidChunkCoord> ChunkLoadQueue;
 	TQueue<FFluidChunkCoord> ChunkUnloadQueue;

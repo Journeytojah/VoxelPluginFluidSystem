@@ -146,6 +146,7 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 		ApplyGravity(DeltaTime);
 		ApplyFlowRules(DeltaTime);
 		ApplyPressure(DeltaTime);
+		ApplyEvaporation(DeltaTime);
 	}
 	else if (CurrentLOD == 1)
 	{
@@ -153,11 +154,13 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 		ApplyGravity(DeltaTime * 0.5f);
 		ApplyFlowRules(DeltaTime * 0.5f);
 		ApplyPressure(DeltaTime);
+		ApplyEvaporation(DeltaTime * 0.5f);
 	}
 	else if (CurrentLOD == 2)
 	{
 		// Minimal simulation
 		ApplyGravity(DeltaTime * 0.25f);
+		ApplyEvaporation(DeltaTime * 0.25f);
 	}
 	
 	ProcessBorderFlow(DeltaTime);
@@ -527,8 +530,8 @@ bool UFluidChunk::IsInLODRange(const FVector& ViewerPosition, float LODDistance)
 void UFluidChunk::SetLODLevel(int32 NewLODLevel)
 {
 	// Force LOD 0 for all chunks to ensure full speed simulation
-	CurrentLOD = 0; // Ignore requested LOD, always use full quality
-	// CurrentLOD = FMath::Clamp(NewLODLevel, 0, 2);
+	// CurrentLOD = 0; // Ignore requested LOD, always use full quality
+	CurrentLOD = FMath::Clamp(NewLODLevel, 0, 2);
 }
 
 void UFluidChunk::ClearChunk()
@@ -645,7 +648,8 @@ void UFluidChunk::ApplyGravity(float DeltaTime)
 				FCAFluidCell& CurrentCell = Cells[CurrentIdx];
 				FCAFluidCell& BelowCell = Cells[BelowIdx];
 				
-				if (CurrentCell.FluidLevel > MinFluidLevel && !BelowCell.bIsSolid)
+				// Allow even tiny amounts of fluid to fall with gravity
+				if (CurrentCell.FluidLevel > 0.0f && !BelowCell.bIsSolid)
 				{
 					const float SpaceBelow = MaxFluidLevel - BelowCell.FluidLevel;
 					float GravityMultiplier = 1.0f;
@@ -691,7 +695,9 @@ void UFluidChunk::ApplyFlowRules(float DeltaTime)
 				
 				FCAFluidCell& CurrentCell = Cells[CurrentIdx];
 				
-				if (CurrentCell.FluidLevel <= MinFluidLevel || CurrentCell.bIsSolid)
+				// Don't skip cells with small amounts of fluid - let them accumulate or flow
+				// Only skip completely dry or solid cells
+				if (CurrentCell.FluidLevel <= 0.0f || CurrentCell.bIsSolid)
 					continue;
 				
 				bool bHasSolidBelow = false;
@@ -828,6 +834,32 @@ void UFluidChunk::ApplyPressure(float DeltaTime)
 						AboveCell.SettledCounter = 0;
 					}
 				}
+			}
+		}
+	}
+}
+
+void UFluidChunk::ApplyEvaporation(float DeltaTime)
+{
+	// Only apply evaporation if rate is greater than 0
+	if (EvaporationRate <= 0.0f)
+		return;
+	
+	// Apply evaporation to all cells with fluid
+	const float EvaporationAmount = EvaporationRate * DeltaTime;
+	
+	for (int32 i = 0; i < NextCells.Num(); ++i)
+	{
+		if (NextCells[i].FluidLevel > 0.0f && !NextCells[i].bIsSolid)
+		{
+			// Evaporate fluid, but don't go below 0
+			NextCells[i].FluidLevel = FMath::Max(0.0f, NextCells[i].FluidLevel - EvaporationAmount);
+			
+			// If fluid level drops below MinFluidLevel after evaporation, remove it completely
+			// This prevents tiny amounts from lingering
+			if (NextCells[i].FluidLevel < MinFluidLevel)
+			{
+				NextCells[i].FluidLevel = 0.0f;
 			}
 		}
 	}

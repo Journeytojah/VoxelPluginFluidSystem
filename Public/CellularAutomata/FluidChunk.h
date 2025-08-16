@@ -350,6 +350,9 @@ public:
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
 	float CompressionFactor = 0.05f;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float EvaporationRate = 0.0f; // Amount of fluid to evaporate per second (0 = no evaporation)
 
 	bool bDirty = false;
 	bool bBorderDirty = false;
@@ -369,6 +372,7 @@ protected:
 	void ApplyGravity(float DeltaTime);
 	void ApplyFlowRules(float DeltaTime);
 	void ApplyPressure(float DeltaTime);
+	void ApplyEvaporation(float DeltaTime);
 	void UpdateVelocities(float DeltaTime);
 	
 	void CalculateHydrostaticPressure();

@@ -121,6 +121,23 @@ void AVoxelFluidActor::Tick(float DeltaTime)
 	{
 		UpdateDebugVisualization();
 	}
+	
+	// Update fluid source statistics
+	if (FluidSources.Num() > 0)
+	{
+		float TotalFlowRate = 0.0f;
+		for (const auto& Source : FluidSources)
+		{
+			TotalFlowRate += Source.Value;
+		}
+		SET_DWORD_STAT(STAT_VoxelFluid_ActiveSources, FluidSources.Num());
+		SET_FLOAT_STAT(STAT_VoxelFluid_TotalSourceFlow, TotalFlowRate);
+	}
+	else
+	{
+		SET_DWORD_STAT(STAT_VoxelFluid_ActiveSources, 0);
+		SET_FLOAT_STAT(STAT_VoxelFluid_TotalSourceFlow, 0.0f);
+	}
 
 	VisualizationComponent->UpdateVisualization();
 }
@@ -454,6 +471,7 @@ void AVoxelFluidActor::InitializeChunkSystem()
 	ChunkManager->SetStreamingConfig(Config);
 	ChunkManager->Viscosity = FluidViscosity;
 	ChunkManager->Gravity = GravityStrength;
+	ChunkManager->EvaporationRate = FluidEvaporationRate;
 	
 	// Sync debug settings
 	ChunkManager->bShowChunkBorders = bShowChunkBorders;

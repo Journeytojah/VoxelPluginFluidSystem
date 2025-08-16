@@ -913,10 +913,8 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 		if (!Chunk || !ShouldRenderChunk(Chunk, ViewerPos))
 			continue;
 			
-		// Calculate LOD level based on distance
-		const FBox ChunkBounds = Chunk->GetWorldBounds();
-		const float Distance = FVector::Dist(ChunkBounds.GetCenter(), ViewerPos);
-		int32 LODLevel = CalculateLODLevel(Distance);
+		// Use the chunk's actual LOD level for consistency with simulation
+		int32 LODLevel = Chunk->CurrentLOD;
 		
 		// Check if we can use cached mesh data first
 		bool bUsedCachedMesh = false;
@@ -1270,16 +1268,32 @@ float UFluidVisualizationComponent::GetSmoothedDensity(const TArray<float>& Dens
 
 int32 UFluidVisualizationComponent::CalculateLODLevel(float Distance) const
 {
-	// Use the chunk system's LOD distances from VoxelFluidActor
-	// LOD 0: Close detail (0 to LOD1Distance)
-	// LOD 1: Medium detail (LOD1Distance to LOD2Distance) 
-	// LOD 2: Low detail (LOD2Distance to MaxRenderDistance)
+	// Use the same LOD distances as the chunk system
+	// Get LOD distances from ChunkManager if available
+	if (ChunkManager)
+	{
+		const FChunkStreamingConfig& Config = ChunkManager->GetStreamingConfig();
+		
+		if (Distance <= Config.LOD1Distance)
+		{
+			return 0; // Full detail
+		}
+		else if (Distance <= Config.LOD2Distance)
+		{
+			return 1; // Reduced detail
+		}
+		else
+		{
+			return 2; // Minimal detail
+		}
+	}
 	
-	if (Distance <= 2000.0f) // LOD1Distance equivalent
+	// Fallback to default values if no ChunkManager
+	if (Distance <= 2000.0f)
 	{
 		return 0; // Full detail
 	}
-	else if (Distance <= 4000.0f) // LOD2Distance equivalent  
+	else if (Distance <= 4000.0f)
 	{
 		return 1; // Reduced detail
 	}

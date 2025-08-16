@@ -48,3 +48,18 @@ DECLARE_FLOAT_COUNTER_STAT(TEXT("Player Z"), STAT_VoxelFluid_PlayerPosZ, STATGRO
 DECLARE_FLOAT_COUNTER_STAT(TEXT("Active Distance"), STAT_VoxelFluid_ActiveDistance, STATGROUP_VoxelFluid);
 DECLARE_FLOAT_COUNTER_STAT(TEXT("Load Distance"), STAT_VoxelFluid_LoadDistance, STATGROUP_VoxelFluid);
 DECLARE_DWORD_COUNTER_STAT(TEXT("Cross-Chunk Flow"), STAT_VoxelFluid_CrossChunkFlow, STATGROUP_VoxelFluid);
+
+// === Persistence & Cache Statistics ===
+DECLARE_DWORD_COUNTER_STAT(TEXT("Cache Entries"), STAT_VoxelFluid_CacheEntries, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Cache Memory KB"), STAT_VoxelFluid_CacheMemoryKB, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Chunks Saved"), STAT_VoxelFluid_ChunksSaved, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Chunks Loaded"), STAT_VoxelFluid_ChunksLoaded, STATGROUP_VoxelFluid);
+
+// === Fluid Sources Statistics ===
+DECLARE_DWORD_COUNTER_STAT(TEXT("Active Fluid Sources"), STAT_VoxelFluid_ActiveSources, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("Total Source Flow Rate"), STAT_VoxelFluid_TotalSourceFlow, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("Evaporation Rate"), STAT_VoxelFluid_EvaporationRate, STATGROUP_VoxelFluid);
+
+// === Memory Statistics ===
+DECLARE_DWORD_COUNTER_STAT(TEXT("Total Memory MB"), STAT_VoxelFluid_TotalMemoryMB, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Mesh Memory MB"), STAT_VoxelFluid_MeshMemoryMB, STATGROUP_VoxelFluid);
