@@ -665,3 +665,157 @@ float FMarchingCubes::GetDensityAt(const TArray<float>& DensityGrid, const FIntV
     
     return 0.0f;
 }
+
+float FMarchingCubes::TrilinearInterpolate(const TArray<float>& DensityGrid, const FIntVector& GridSize,
+                                         const FVector& Position, float CellSize, const FVector& GridOrigin)
+{
+    // Convert world position to grid space
+    FVector LocalPos = (Position - GridOrigin) / CellSize;
+    
+    // Get integer grid coordinates
+    int32 X0 = FMath::FloorToInt(LocalPos.X);
+    int32 Y0 = FMath::FloorToInt(LocalPos.Y);
+    int32 Z0 = FMath::FloorToInt(LocalPos.Z);
+    
+    int32 X1 = X0 + 1;
+    int32 Y1 = Y0 + 1;
+    int32 Z1 = Z0 + 1;
+    
+    // Get fractional parts
+    float FracX = LocalPos.X - X0;
+    float FracY = LocalPos.Y - Y0;
+    float FracZ = LocalPos.Z - Z0;
+    
+    // Get density values at 8 corners
+    float D000 = GetDensityAt(DensityGrid, GridSize, X0, Y0, Z0);
+    float D100 = GetDensityAt(DensityGrid, GridSize, X1, Y0, Z0);
+    float D010 = GetDensityAt(DensityGrid, GridSize, X0, Y1, Z0);
+    float D110 = GetDensityAt(DensityGrid, GridSize, X1, Y1, Z0);
+    float D001 = GetDensityAt(DensityGrid, GridSize, X0, Y0, Z1);
+    float D101 = GetDensityAt(DensityGrid, GridSize, X1, Y0, Z1);
+    float D011 = GetDensityAt(DensityGrid, GridSize, X0, Y1, Z1);
+    float D111 = GetDensityAt(DensityGrid, GridSize, X1, Y1, Z1);
+    
+    // Trilinear interpolation
+    float C00 = D000 * (1.0f - FracX) + D100 * FracX;
+    float C01 = D001 * (1.0f - FracX) + D101 * FracX;
+    float C10 = D010 * (1.0f - FracX) + D110 * FracX;
+    float C11 = D011 * (1.0f - FracX) + D111 * FracX;
+    
+    float C0 = C00 * (1.0f - FracY) + C10 * FracY;
+    float C1 = C01 * (1.0f - FracY) + C11 * FracY;
+    
+    return C0 * (1.0f - FracZ) + C1 * FracZ;
+}
+
+float FMarchingCubes::SampleDensityInterpolated(UFluidChunk* FluidChunk, UFluidChunkManager* ChunkManager,
+                                              const FVector& LocalPosition)
+{
+    if (!FluidChunk)
+        return 0.0f;
+    
+    const float CellSize = FluidChunk->CellSize;
+    const int32 ChunkSize = FluidChunk->ChunkSize;
+    
+    // Get integer grid coordinates
+    int32 X0 = FMath::FloorToInt(LocalPosition.X);
+    int32 Y0 = FMath::FloorToInt(LocalPosition.Y);
+    int32 Z0 = FMath::FloorToInt(LocalPosition.Z);
+    
+    int32 X1 = X0 + 1;
+    int32 Y1 = Y0 + 1;
+    int32 Z1 = Z0 + 1;
+    
+    // Get fractional parts
+    float FracX = LocalPosition.X - X0;
+    float FracY = LocalPosition.Y - Y0;
+    float FracZ = LocalPosition.Z - Z0;
+    
+    // Helper lambda to get density with boundary handling
+    auto GetDensity = [&](int32 X, int32 Y, int32 Z) -> float
+    {
+        if (X >= 0 && X < ChunkSize && Y >= 0 && Y < ChunkSize && Z >= 0 && Z < ChunkSize)
+        {
+            return FluidChunk->GetFluidAt(X, Y, Z);
+        }
+        else if (ChunkManager)
+        {
+            // Sample from neighboring chunks
+            FVector WorldPos = FluidChunk->ChunkWorldPosition + FVector(X, Y, Z) * CellSize;
+            return ChunkManager->GetFluidAtWorldPosition(WorldPos);
+        }
+        return 0.0f;
+    };
+    
+    // Get density values at 8 corners
+    float D000 = GetDensity(X0, Y0, Z0);
+    float D100 = GetDensity(X1, Y0, Z0);
+    float D010 = GetDensity(X0, Y1, Z0);
+    float D110 = GetDensity(X1, Y1, Z0);
+    float D001 = GetDensity(X0, Y0, Z1);
+    float D101 = GetDensity(X1, Y0, Z1);
+    float D011 = GetDensity(X0, Y1, Z1);
+    float D111 = GetDensity(X1, Y1, Z1);
+    
+    // Trilinear interpolation
+    float C00 = D000 * (1.0f - FracX) + D100 * FracX;
+    float C01 = D001 * (1.0f - FracX) + D101 * FracX;
+    float C10 = D010 * (1.0f - FracX) + D110 * FracX;
+    float C11 = D011 * (1.0f - FracX) + D111 * FracX;
+    
+    float C0 = C00 * (1.0f - FracY) + C10 * FracY;
+    float C1 = C01 * (1.0f - FracY) + C11 * FracY;
+    
+    return C0 * (1.0f - FracZ) + C1 * FracZ;
+}
+
+void FMarchingCubes::GenerateHighResChunkMesh(UFluidChunk* FluidChunk, UFluidChunkManager* ChunkManager,
+                                            float IsoLevel, int32 ResolutionMultiplier,
+                                            TArray<FMarchingCubesVertex>& OutVertices,
+                                            TArray<FMarchingCubesTriangle>& OutTriangles)
+{
+    if (!FluidChunk || ResolutionMultiplier < 1)
+        return;
+        
+    OutVertices.Empty();
+    OutTriangles.Empty();
+    
+    const int32 ChunkSize = FluidChunk->ChunkSize;
+    const float CellSize = FluidChunk->CellSize;
+    const FVector ChunkOrigin = FluidChunk->ChunkWorldPosition;
+    
+    // Calculate the high-resolution grid size
+    const int32 HighResSize = (ChunkSize - 1) * ResolutionMultiplier + 1;
+    const float HighResCellSize = CellSize / ResolutionMultiplier;
+    
+    // Process each high-resolution cube
+    for (int32 X = 0; X < HighResSize - 1; ++X)
+    {
+        for (int32 Y = 0; Y < HighResSize - 1; ++Y)
+        {
+            for (int32 Z = 0; Z < HighResSize - 1; ++Z)
+            {
+                FCubeConfiguration Config;
+                
+                // Set up the cube configuration at high resolution
+                const FVector CubeOrigin = ChunkOrigin + FVector(X, Y, Z) * HighResCellSize;
+                
+                // Fill in corner positions and interpolated density values
+                for (int32 CornerIndex = 0; CornerIndex < 8; ++CornerIndex)
+                {
+                    const FVector RelativeCorner = CubeCorners[CornerIndex];
+                    Config.Positions[CornerIndex] = CubeOrigin + RelativeCorner * HighResCellSize;
+                    
+                    // Get interpolated density at this high-res corner position
+                    FVector LocalPos = FVector(X, Y, Z) + RelativeCorner;
+                    LocalPos /= ResolutionMultiplier; // Convert to original grid space
+                    
+                    Config.DensityValues[CornerIndex] = SampleDensityInterpolated(FluidChunk, ChunkManager, LocalPos);
+                }
+                
+                // Generate mesh for this high-resolution cube
+                GenerateCube(Config, IsoLevel, OutVertices, OutTriangles);
+            }
+        }
+    }
+}

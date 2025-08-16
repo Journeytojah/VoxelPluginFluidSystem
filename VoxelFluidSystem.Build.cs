@@ -15,7 +15,8 @@ public class VoxelFluidSystem : ModuleRules
 			"InputCore", 
 			"EnhancedInput",
 			"Voxel",
-			"ProceduralMeshComponent"
+			"ProceduralMeshComponent",
+			"Niagara"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { 

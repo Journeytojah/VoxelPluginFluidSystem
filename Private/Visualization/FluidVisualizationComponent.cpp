@@ -615,25 +615,94 @@ void UFluidVisualizationComponent::GenerateMarchingCubesVisualization()
 	const int32 GridSizeY = FluidGrid->GridSizeY;
 	const int32 GridSizeZ = FluidGrid->GridSizeZ;
 	
-	NewDensityGrid.Reserve(GridSizeX * GridSizeY * GridSizeZ);
-	
-	// Convert fluid levels to density values
-	for (int32 Z = 0; Z < GridSizeZ; ++Z)
+	// Check if we need to generate high-resolution mesh
+	if (MarchingCubesResolutionMultiplier > 1)
 	{
-		for (int32 Y = 0; Y < GridSizeY; ++Y)
+		// Generate high-resolution density grid using interpolation
+		const int32 HighResX = (GridSizeX - 1) * MarchingCubesResolutionMultiplier + 1;
+		const int32 HighResY = (GridSizeY - 1) * MarchingCubesResolutionMultiplier + 1;
+		const int32 HighResZ = (GridSizeZ - 1) * MarchingCubesResolutionMultiplier + 1;
+		
+		NewDensityGrid.Reserve(HighResX * HighResY * HighResZ);
+		
+		// Create upsampled density grid with trilinear interpolation
+		for (int32 Z = 0; Z < HighResZ; ++Z)
 		{
-			for (int32 X = 0; X < GridSizeX; ++X)
+			for (int32 Y = 0; Y < HighResY; ++Y)
 			{
-				const float FluidLevel = FluidGrid->GetFluidAt(X, Y, Z);
-				NewDensityGrid.Add(FluidLevel);
+				for (int32 X = 0; X < HighResX; ++X)
+				{
+					// Convert high-res coordinates to original grid space
+					float OrigX = (float)X / MarchingCubesResolutionMultiplier;
+					float OrigY = (float)Y / MarchingCubesResolutionMultiplier;
+					float OrigZ = (float)Z / MarchingCubesResolutionMultiplier;
+					
+					// Trilinear interpolation
+					int32 X0 = FMath::FloorToInt(OrigX);
+					int32 Y0 = FMath::FloorToInt(OrigY);
+					int32 Z0 = FMath::FloorToInt(OrigZ);
+					int32 X1 = FMath::Min(X0 + 1, GridSizeX - 1);
+					int32 Y1 = FMath::Min(Y0 + 1, GridSizeY - 1);
+					int32 Z1 = FMath::Min(Z0 + 1, GridSizeZ - 1);
+					
+					float FracX = OrigX - X0;
+					float FracY = OrigY - Y0;
+					float FracZ = OrigZ - Z0;
+					
+					// Get 8 corner values
+					float V000 = FluidGrid->GetFluidAt(X0, Y0, Z0);
+					float V100 = FluidGrid->GetFluidAt(X1, Y0, Z0);
+					float V010 = FluidGrid->GetFluidAt(X0, Y1, Z0);
+					float V110 = FluidGrid->GetFluidAt(X1, Y1, Z0);
+					float V001 = FluidGrid->GetFluidAt(X0, Y0, Z1);
+					float V101 = FluidGrid->GetFluidAt(X1, Y0, Z1);
+					float V011 = FluidGrid->GetFluidAt(X0, Y1, Z1);
+					float V111 = FluidGrid->GetFluidAt(X1, Y1, Z1);
+					
+					// Trilinear interpolation
+					float C00 = V000 * (1.0f - FracX) + V100 * FracX;
+					float C01 = V001 * (1.0f - FracX) + V101 * FracX;
+					float C10 = V010 * (1.0f - FracX) + V110 * FracX;
+					float C11 = V011 * (1.0f - FracX) + V111 * FracX;
+					
+					float C0 = C00 * (1.0f - FracY) + C10 * FracY;
+					float C1 = C01 * (1.0f - FracY) + C11 * FracY;
+					
+					float InterpolatedValue = C0 * (1.0f - FracZ) + C1 * FracZ;
+					NewDensityGrid.Add(InterpolatedValue);
+				}
 			}
 		}
+		
+		// Apply density smoothing on high-res grid if enabled
+		if (bEnableDensitySmoothing)
+		{
+			SmoothDensityGrid(NewDensityGrid, FIntVector(HighResX, HighResY, HighResZ));
+		}
 	}
-	
-	// Apply density smoothing to reduce gaps
-	if (bEnableDensitySmoothing)
+	else
 	{
-		SmoothDensityGrid(NewDensityGrid, FIntVector(GridSizeX, GridSizeY, GridSizeZ));
+		// Standard resolution
+		NewDensityGrid.Reserve(GridSizeX * GridSizeY * GridSizeZ);
+		
+		// Convert fluid levels to density values
+		for (int32 Z = 0; Z < GridSizeZ; ++Z)
+		{
+			for (int32 Y = 0; Y < GridSizeY; ++Y)
+			{
+				for (int32 X = 0; X < GridSizeX; ++X)
+				{
+					const float FluidLevel = FluidGrid->GetFluidAt(X, Y, Z);
+					NewDensityGrid.Add(FluidLevel);
+				}
+			}
+		}
+		
+		// Apply density smoothing to reduce gaps
+		if (bEnableDensitySmoothing)
+		{
+			SmoothDensityGrid(NewDensityGrid, FIntVector(GridSizeX, GridSizeY, GridSizeZ));
+		}
 	}
 	
 	// Use smooth interpolation if enabled
@@ -672,15 +741,36 @@ void UFluidVisualizationComponent::GenerateMarchingCubesVisualization()
 	TArray<FMarchingCubes::FMarchingCubesVertex> MarchingVertices;
 	TArray<FMarchingCubes::FMarchingCubesTriangle> MarchingTriangles;
 	
-	FMarchingCubes::GenerateGridMesh(
-		DensityGrid,
-		FIntVector(GridSizeX, GridSizeY, GridSizeZ),
-		FluidGrid->CellSize,
-		FluidGrid->GridOrigin,
-		MarchingCubesIsoLevel,
-		MarchingVertices,
-		MarchingTriangles
-	);
+	// Use appropriate grid size based on resolution multiplier
+	if (MarchingCubesResolutionMultiplier > 1)
+	{
+		const int32 HighResX = (GridSizeX - 1) * MarchingCubesResolutionMultiplier + 1;
+		const int32 HighResY = (GridSizeY - 1) * MarchingCubesResolutionMultiplier + 1;
+		const int32 HighResZ = (GridSizeZ - 1) * MarchingCubesResolutionMultiplier + 1;
+		const float HighResCellSize = FluidGrid->CellSize / MarchingCubesResolutionMultiplier;
+		
+		FMarchingCubes::GenerateGridMesh(
+			DensityGrid,
+			FIntVector(HighResX, HighResY, HighResZ),
+			HighResCellSize,
+			FluidGrid->GridOrigin,
+			MarchingCubesIsoLevel,
+			MarchingVertices,
+			MarchingTriangles
+		);
+	}
+	else
+	{
+		FMarchingCubes::GenerateGridMesh(
+			DensityGrid,
+			FIntVector(GridSizeX, GridSizeY, GridSizeZ),
+			FluidGrid->CellSize,
+			FluidGrid->GridOrigin,
+			MarchingCubesIsoLevel,
+			MarchingVertices,
+			MarchingTriangles
+		);
+	}
 	
 	// Convert to UE4 procedural mesh format
 	TArray<FVector> Vertices;
@@ -1163,15 +1253,43 @@ void UFluidVisualizationComponent::GenerateChunkMeshWithLOD(UFluidChunk* Chunk, 
 	if (!Chunk || !ChunkManager)
 		return;
 		
-	// Adjust marching cubes generation based on LOD level
+	// Determine effective resolution multiplier based on LOD and adaptive settings
+	int32 EffectiveResolution = MarchingCubesResolutionMultiplier;
+	if (bUseAdaptiveResolution)
+	{
+		// Reduce resolution for higher LOD levels
+		EffectiveResolution = FMath::Max(1, MarchingCubesResolutionMultiplier - LODLevel);
+	}
+	
+	// Adjust marching cubes generation based on LOD level and resolution multiplier
 	switch (LODLevel)
 	{
-		case 0: // Full detail - use seamless generation
-			FMarchingCubes::GenerateSeamlessChunkMesh(Chunk, ChunkManager, MarchingCubesIsoLevel, OutVertices, OutTriangles);
+		case 0: // Full detail - use high-resolution seamless generation
+			if (EffectiveResolution > 1)
+			{
+				// Use high-resolution upsampled mesh for close-up views
+				FMarchingCubes::GenerateHighResChunkMesh(Chunk, ChunkManager, MarchingCubesIsoLevel, 
+				                                       EffectiveResolution, OutVertices, OutTriangles);
+			}
+			else
+			{
+				// Standard seamless generation
+				FMarchingCubes::GenerateSeamlessChunkMesh(Chunk, ChunkManager, MarchingCubesIsoLevel, OutVertices, OutTriangles);
+			}
 			break;
 			
-		case 1: // Medium detail - use regular generation with slightly higher iso level for performance
-			FMarchingCubes::GenerateSeamlessChunkMesh(Chunk, ChunkManager, MarchingCubesIsoLevel * 1.2f, OutVertices, OutTriangles);
+		case 1: // Medium detail - use reduced resolution if adaptive
+			if (bUseAdaptiveResolution && EffectiveResolution > 1)
+			{
+				// Use medium-resolution upsampled mesh
+				FMarchingCubes::GenerateHighResChunkMesh(Chunk, ChunkManager, MarchingCubesIsoLevel * 1.1f, 
+				                                       EffectiveResolution, OutVertices, OutTriangles);
+			}
+			else
+			{
+				// Standard seamless generation
+				FMarchingCubes::GenerateSeamlessChunkMesh(Chunk, ChunkManager, MarchingCubesIsoLevel * 1.2f, OutVertices, OutTriangles);
+			}
 			break;
 			
 		case 2: // Low detail - use basic generation without seamless boundaries for best performance

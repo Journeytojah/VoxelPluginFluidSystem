@@ -126,6 +126,22 @@ public:
                                         TArray<FMarchingCubesVertex>& OutVertices,
                                         TArray<FMarchingCubesTriangle>& OutTriangles);
 
+    /**
+     * Generate high-resolution mesh for a fluid chunk using upsampled density field
+     * @param FluidChunk - The chunk containing fluid density data
+     * @param ChunkManager - Manager for accessing neighboring chunks
+     * @param IsoLevel - The density threshold for surface generation
+     * @param ResolutionMultiplier - How many times to subdivide each cell (2 = 2x2x2 = 8x more detail)
+     * @param OutVertices - Generated vertices
+     * @param OutTriangles - Generated triangles
+     */
+    static void GenerateHighResChunkMesh(class UFluidChunk* FluidChunk,
+                                       class UFluidChunkManager* ChunkManager,
+                                       float IsoLevel,
+                                       int32 ResolutionMultiplier,
+                                       TArray<FMarchingCubesVertex>& OutVertices,
+                                       TArray<FMarchingCubesTriangle>& OutTriangles);
+
 private:
     /**
      * Interpolate vertex position along an edge based on density values
@@ -153,4 +169,16 @@ private:
      */
     static float GetDensityAt(const TArray<float>& DensityGrid, const FIntVector& GridSize, 
                             int32 X, int32 Y, int32 Z);
+    
+    /**
+     * Trilinear interpolation of density values
+     */
+    static float TrilinearInterpolate(const TArray<float>& DensityGrid, const FIntVector& GridSize,
+                                    const FVector& Position, float CellSize, const FVector& GridOrigin);
+    
+    /**
+     * Sample density at a fractional grid position using trilinear interpolation
+     */
+    static float SampleDensityInterpolated(class UFluidChunk* FluidChunk, class UFluidChunkManager* ChunkManager,
+                                         const FVector& LocalPosition);
 };

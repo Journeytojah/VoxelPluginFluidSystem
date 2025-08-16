@@ -123,6 +123,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
 	bool bEnableGapFilling = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "1", ClampMax = "4"))
+	int32 MarchingCubesResolutionMultiplier = 2;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
+	bool bUseAdaptiveResolution = true;
+
 private:
 	UPROPERTY()
 	UCAFluidGrid* FluidGrid;
