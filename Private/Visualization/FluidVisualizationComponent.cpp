@@ -1282,9 +1282,13 @@ int32 UFluidVisualizationComponent::CalculateLODLevel(float Distance) const
 		{
 			return 1; // Reduced detail
 		}
-		else
+		else if (Distance <= Config.LOD2Distance * 2.0f) // Extended LOD for far water
 		{
 			return 2; // Minimal detail
+		}
+		else
+		{
+			return 3; // Ultra-low detail for very distant water
 		}
 	}
 	
@@ -1293,13 +1297,17 @@ int32 UFluidVisualizationComponent::CalculateLODLevel(float Distance) const
 	{
 		return 0; // Full detail
 	}
-	else if (Distance <= 4000.0f)
+	else if (Distance <= 5000.0f)
 	{
 		return 1; // Reduced detail
 	}
-	else
+	else if (Distance <= 10000.0f)
 	{
 		return 2; // Minimal detail
+	}
+	else
+	{
+		return 3; // Ultra-low detail
 	}
 }
 
@@ -1348,8 +1356,13 @@ void UFluidVisualizationComponent::GenerateChunkMeshWithLOD(UFluidChunk* Chunk, 
 			break;
 			
 		case 2: // Low detail - use basic generation without seamless boundaries for best performance
-		default:
 			FMarchingCubes::GenerateChunkMesh(Chunk, MarchingCubesIsoLevel * 1.5f, OutVertices, OutTriangles);
+			break;
+			
+		case 3: // Ultra-low detail for very distant water - just a simplified flat mesh
+		default:
+			// Generate a very simplified mesh for distant water bodies
+			FMarchingCubes::GenerateChunkMesh(Chunk, MarchingCubesIsoLevel * 2.0f, OutVertices, OutTriangles);
 			break;
 	}
 }

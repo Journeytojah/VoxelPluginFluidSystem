@@ -78,8 +78,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization")
 	float FlowVectorScale = 50.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Visualization")
-	float MaxRenderDistance = 10000.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Visualization", meta = (ClampMin = "1000.0", ClampMax = "100000.0"))
+	float MaxRenderDistance = 30000.0f; // Increased to 300 meters for visible rivers/lakes
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Visualization")
 	bool bShowChunkBounds = false;

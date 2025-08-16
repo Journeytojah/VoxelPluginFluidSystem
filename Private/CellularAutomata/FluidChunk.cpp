@@ -631,7 +631,8 @@ bool UFluidChunk::HasFluid() const
 void UFluidChunk::ApplyGravity(float DeltaTime)
 {
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ApplyGravity);
-	const float GravityFlow = (Gravity / 1000.0f) * DeltaTime;
+	// Reduce gravity effect for better water accumulation
+	const float GravityFlow = (Gravity / 1000.0f) * DeltaTime * 0.8f;
 	
 	for (int32 z = ChunkSize - 1; z >= 1; --z)
 	{
@@ -681,7 +682,8 @@ void UFluidChunk::ApplyGravity(float DeltaTime)
 void UFluidChunk::ApplyFlowRules(float DeltaTime)
 {
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ApplyFlowRules);
-	const float FlowAmount = FlowRate * DeltaTime;
+	// Reduce flow rate for better pooling and accumulation
+	const float FlowAmount = FlowRate * DeltaTime * 0.7f;
 	
 	for (int32 z = 0; z < ChunkSize; ++z)
 	{
@@ -714,7 +716,8 @@ void UFluidChunk::ApplyFlowRules(float DeltaTime)
 					bHasSolidBelow = true;
 				}
 				
-				const float HorizontalFlowMultiplier = bHasSolidBelow ? 2.5f : 1.0f;
+				// Reduce horizontal flow when on solid ground to encourage pooling
+				const float HorizontalFlowMultiplier = bHasSolidBelow ? 1.5f : 1.0f;
 				const float AdjustedFlowAmount = FlowAmount * HorizontalFlowMultiplier;
 				
 				const int32 Neighbors[4][2] = {
@@ -745,13 +748,16 @@ void UFluidChunk::ApplyFlowRules(float DeltaTime)
 							const float NeighborFluidHeight = FMath::Max(CurrentCellZ, NeighborCell.TerrainHeight) + NeighborCell.FluidLevel;
 							const float HeightDiff = CurrentFluidHeight - NeighborFluidHeight;
 							
-							const float MinHeightDiffForFlow = bHasSolidBelow ? 0.01f : 0.0f;
+							// Increase minimum height difference for flow to encourage pooling
+							const float MinHeightDiffForFlow = bHasSolidBelow ? 0.02f : 0.01f;
 							
-							if (HeightDiff > MinHeightDiffForFlow || (bHasSolidBelow && CurrentCell.FluidLevel > 0.1f && NeighborCell.FluidLevel < CurrentCell.FluidLevel))
+							// Only flow if there's significant height difference or significant fluid volume
+							if (HeightDiff > MinHeightDiffForFlow || (bHasSolidBelow && CurrentCell.FluidLevel > 0.2f && NeighborCell.FluidLevel < CurrentCell.FluidLevel * 0.8f))
 							{
+								// Reduce flow amount for better accumulation
 								const float PossibleFlow = bHasSolidBelow ?
-									FMath::Min(CurrentCell.FluidLevel * AdjustedFlowAmount, FMath::Max(HeightDiff * 0.8f, CurrentCell.FluidLevel * 0.25f)) :
-									FMath::Min(CurrentCell.FluidLevel * AdjustedFlowAmount, HeightDiff * 0.5f);
+									FMath::Min(CurrentCell.FluidLevel * AdjustedFlowAmount, FMath::Max(HeightDiff * 0.5f, CurrentCell.FluidLevel * 0.15f)) :
+									FMath::Min(CurrentCell.FluidLevel * AdjustedFlowAmount, HeightDiff * 0.3f);
 								
 								const float SpaceInNeighbor = MaxFluidLevel - NeighborCell.FluidLevel;
 								OutflowToNeighbor[i] = FMath::Min(PossibleFlow, SpaceInNeighbor);

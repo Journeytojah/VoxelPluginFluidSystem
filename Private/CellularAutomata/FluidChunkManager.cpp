@@ -363,10 +363,16 @@ FFluidChunkCoord UFluidChunkManager::GetChunkCoordFromWorldPosition(const FVecto
 
 bool UFluidChunkManager::GetCellFromWorldPosition(const FVector& WorldPos, FFluidChunkCoord& OutChunkCoord, int32& OutLocalX, int32& OutLocalY, int32& OutLocalZ) const
 {
+	// Validate this pointer for async access
+	if (!IsValid(this))
+		return false;
+		
 	OutChunkCoord = GetChunkCoordFromWorldPosition(WorldPos);
 	
+	// Thread-safe chunk access
+	FScopeLock Lock(&const_cast<UFluidChunkManager*>(this)->ChunkMapMutex);
 	UFluidChunk* Chunk = const_cast<UFluidChunkManager*>(this)->GetChunk(OutChunkCoord);
-	if (!Chunk)
+	if (!Chunk || !IsValid(Chunk))
 		return false;
 	
 	return Chunk->GetLocalFromWorldPosition(WorldPos, OutLocalX, OutLocalY, OutLocalZ);
@@ -413,13 +419,21 @@ void UFluidChunkManager::RemoveFluidAtWorldPosition(const FVector& WorldPos, flo
 
 float UFluidChunkManager::GetFluidAtWorldPosition(const FVector& WorldPos) const
 {
+	// Validate this pointer for async access
+	if (!IsValid(this))
+		return 0.0f;
+		
 	FFluidChunkCoord ChunkCoord;
 	int32 LocalX, LocalY, LocalZ;
 	
+	// GetCellFromWorldPosition already handles thread safety and validation
 	if (GetCellFromWorldPosition(WorldPos, ChunkCoord, LocalX, LocalY, LocalZ))
 	{
+		// Thread-safe chunk access
+		FScopeLock Lock(&const_cast<UFluidChunkManager*>(this)->ChunkMapMutex);
+		
 		UFluidChunk* Chunk = const_cast<UFluidChunkManager*>(this)->GetChunk(ChunkCoord);
-		if (Chunk && Chunk->State != EChunkState::Unloaded)
+		if (Chunk && IsValid(Chunk) && Chunk->State != EChunkState::Unloaded)
 		{
 			return Chunk->GetFluidAt(LocalX, LocalY, LocalZ);
 		}
