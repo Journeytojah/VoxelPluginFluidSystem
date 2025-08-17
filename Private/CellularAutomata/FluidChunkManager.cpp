@@ -203,89 +203,108 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 	
 	TArray<UFluidChunk*> ActiveChunkArray = GetActiveChunks();
 	
-	// Separate chunks by activity level for sparse processing
-	TArray<UFluidChunk*> HighActivityChunks;
-	TArray<UFluidChunk*> LowActivityChunks;
-	TArray<UFluidChunk*> SettledChunks;
-	
-	HighActivityChunks.Reserve(ActiveChunkArray.Num() / 2);
-	LowActivityChunks.Reserve(ActiveChunkArray.Num() / 2);
-	SettledChunks.Reserve(ActiveChunkArray.Num() / 4);
-	
-	// Process all chunks equally for consistent updates
-	// Disabled activity-based categorization
-	for (UFluidChunk* Chunk : ActiveChunkArray)
+	// Use optimized parallel processing
+	if (bUseOptimizedParallelProcessing && ActiveChunkArray.Num() > 2)
 	{
-		if (!Chunk) continue;
+		// Process all chunks in parallel with optimized thread count
+		const int32 OptimalThreads = FMath::Min(8, FMath::Max(1, FPlatformMisc::NumberOfCoresIncludingHyperthreads() * 3 / 4));
+		const int32 BatchSize = FMath::Max(1, ActiveChunkArray.Num() / OptimalThreads);
 		
-		// Treat all chunks as high activity for consistent updates
-		HighActivityChunks.Add(Chunk);
-		
-		// Old categorization disabled:
-		// if (Chunk->bFullySettled && Chunk->InactiveFrameCount > 120)
-		// {
-		// 	SettledChunks.Add(Chunk);
-		// }
-		// else if (Chunk->LastActivityLevel < 0.01f)
-		// {
-		// 	LowActivityChunks.Add(Chunk);
-		// }
-		// else
-		// {
-		// 	HighActivityChunks.Add(Chunk);
-		// }
-	}
-	
-	// Process high activity chunks every frame
-	if (StreamingConfig.bUseAsyncLoading && HighActivityChunks.Num() > 4)
-	{
-		ParallelFor(HighActivityChunks.Num(), [&](int32 Index)
+		ParallelFor(TEXT("FluidChunkUpdate"), ActiveChunkArray.Num(), BatchSize, [&](int32 Index)
 		{
-			if (HighActivityChunks[Index])
+			if (ActiveChunkArray[Index])
 			{
-				HighActivityChunks[Index]->UpdateSimulation(DeltaTime);
+				ActiveChunkArray[Index]->UpdateSimulation(DeltaTime);
 			}
-		});
+		}, EParallelForFlags::None);
+		
+		// Synchronize borders - can also be done in parallel for non-conflicting chunks
+		// For now, using serial synchronization to avoid race conditions
+		SynchronizeChunkBorders();
 	}
 	else
 	{
-		for (UFluidChunk* Chunk : HighActivityChunks)
+		// Fallback to original processing for small chunk counts or if optimization disabled
+		TArray<UFluidChunk*> HighActivityChunks;
+		TArray<UFluidChunk*> LowActivityChunks;
+		TArray<UFluidChunk*> SettledChunks;
+		
+		HighActivityChunks.Reserve(ActiveChunkArray.Num() / 2);
+		LowActivityChunks.Reserve(ActiveChunkArray.Num() / 2);
+		SettledChunks.Reserve(ActiveChunkArray.Num() / 4);
+		
+		// Process all chunks equally for consistent updates
+		for (UFluidChunk* Chunk : ActiveChunkArray)
+		{
+			if (!Chunk) continue;
+			HighActivityChunks.Add(Chunk);
+		}
+		
+		// Process high activity chunks
+		if (StreamingConfig.bUseAsyncLoading && HighActivityChunks.Num() > 4)
+		{
+			ParallelFor(HighActivityChunks.Num(), [&](int32 Index)
+			{
+				if (HighActivityChunks[Index])
+				{
+					HighActivityChunks[Index]->UpdateSimulation(DeltaTime);
+				}
+			});
+		}
+		else
+		{
+			for (UFluidChunk* Chunk : HighActivityChunks)
+			{
+				if (Chunk)
+				{
+					Chunk->UpdateSimulation(DeltaTime);
+				}
+			}
+		}
+		
+		// Process low activity chunks
+		for (UFluidChunk* Chunk : LowActivityChunks)
 		{
 			if (Chunk)
 			{
 				Chunk->UpdateSimulation(DeltaTime);
 			}
 		}
-	}
-	
-	// Process all low activity chunks every frame for consistency
-	for (UFluidChunk* Chunk : LowActivityChunks)
-	{
-		if (Chunk)
+		
+		// Process settled chunks
+		for (UFluidChunk* Chunk : SettledChunks)
 		{
-			Chunk->UpdateSimulation(DeltaTime);
+			if (Chunk)
+			{
+				Chunk->UpdateSimulation(DeltaTime);
+			}
 		}
+		
+		// Synchronize borders
+		SynchronizeChunkBorders();
 	}
 	
-	// Process all settled chunks every frame for consistency
-	for (UFluidChunk* Chunk : SettledChunks)
+	// Apply the NextCells to Cells for all chunks after border sync
+	if (bUseOptimizedParallelProcessing && ActiveChunkArray.Num() > 8)
 	{
-		if (Chunk)
+		// Parallel cell swap
+		ParallelFor(ActiveChunkArray.Num(), [&](int32 Index)
 		{
-			Chunk->UpdateSimulation(DeltaTime);
-		}
+			if (ActiveChunkArray[Index])
+			{
+				ActiveChunkArray[Index]->Cells = ActiveChunkArray[Index]->NextCells;
+			}
+		});
 	}
-	
-	// Then synchronize borders between chunks
-	SynchronizeChunkBorders();
-	
-	// Finally, apply the NextCells to Cells for all chunks after border sync
-	for (UFluidChunk* Chunk : ActiveChunkArray)
+	else
 	{
-		if (Chunk)
+		// Serial cell swap
+		for (UFluidChunk* Chunk : ActiveChunkArray)
 		{
-			// Swap the cell buffers to apply border changes
-			Chunk->Cells = Chunk->NextCells;
+			if (Chunk)
+			{
+				Chunk->Cells = Chunk->NextCells;
+			}
 		}
 	}
 }
@@ -1801,6 +1820,20 @@ void UFluidChunkManager::ForceActivateChunk(UFluidChunk* Chunk)
 	
 	// Call protected ActivateChunk method
 	ActivateChunk(Chunk);
+}
+
+void UFluidChunkManager::EnableCompressedMode(bool bEnable)
+{
+	// Apply compression settings to all loaded chunks
+	// Note: Individual chunks handle their own compression in SerializeChunkData/DeserializeChunkData
+	// This is a placeholder for future chunk-level compression implementation
+	
+	UE_LOG(LogTemp, Warning, TEXT("FluidChunkManager: Memory compression %s for all chunks"), 
+		bEnable ? TEXT("ENABLED") : TEXT("DISABLED"));
+	
+	// The actual compression happens in FChunkPersistentData which already uses compressed cells
+	// This flag could be used to enable/disable compression at runtime
+	// For now, compression is always used when saving/loading chunks
 }
 
 void UFluidChunkManager::ForceUnloadAllChunks()

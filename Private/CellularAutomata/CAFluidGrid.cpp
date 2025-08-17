@@ -117,7 +117,37 @@ void UCAFluidGrid::UpdateSimulation(float DeltaTime)
 	// Initialize update flags for this frame
 	if (bEnableSettling)
 	{
-		InitializeUpdateFlags();
+		// Add detailed timing for optimization debugging
+		double InitFlagsTime = 0.0;
+		double PredictiveTime = 0.0;
+		double SleepChainTime = 0.0;
+		
+		{
+			double StartTime = FPlatformTime::Seconds();
+			InitializeUpdateFlagsOptimized();
+			InitFlagsTime = (FPlatformTime::Seconds() - StartTime) * 1000.0;
+		}
+		
+		// Update advanced settling systems
+		if (bUsePredictiveSettling && !bUseSleepChains) // Only use predictive if sleep chains disabled
+		{
+			double StartTime = FPlatformTime::Seconds();
+			UpdateSettlingPrediction();
+			PredictiveTime = (FPlatformTime::Seconds() - StartTime) * 1000.0;
+		}
+		
+		if (bUseSleepChains)
+		{
+			double StartTime = FPlatformTime::Seconds();
+			UpdateSleepChainsOptimized();
+			SleepChainTime = (FPlatformTime::Seconds() - StartTime) * 1000.0;
+		}
+		
+		if (InitFlagsTime > 0.5 || PredictiveTime > 0.5 || SleepChainTime > 0.5)
+		{
+			UE_LOG(LogTemp, VeryVerbose, TEXT("Optimization Timing: InitFlags=%.2fms, Predictive=%.2fms, SleepChain=%.2fms"),
+				InitFlagsTime, PredictiveTime, SleepChainTime);
+		}
 	}
 
 	// Combined physics pass for better cache efficiency
@@ -852,6 +882,68 @@ void UCAFluidGrid::InitializeUpdateFlags()
 	}
 }
 
+void UCAFluidGrid::InitializeUpdateFlagsOptimized()
+{
+	// Optimized version that only checks unsettled cells and their neighbors
+	ActiveCellCount = 0;
+	
+	// First pass: mark all unsettled cells
+	for (int32 i = 0; i < Cells.Num(); ++i)
+	{
+		const FCAFluidCell& Cell = Cells[i];
+		if (Cell.FluidLevel > MinFluidLevel && !Cell.bSettled)
+		{
+			CellNeedsUpdate[i] = true;
+			ActiveCellCount++;
+		}
+		else
+		{
+			CellNeedsUpdate[i] = false;
+		}
+	}
+	
+	// Second pass: mark neighbors of active cells
+	for (int32 i = 0; i < Cells.Num(); ++i)
+	{
+		if (CellNeedsUpdate[i] && Cells[i].FluidLevel > MinFluidLevel)
+		{
+			// Get coordinates
+			int32 x = i % GridSizeX;
+			int32 y = (i / GridSizeX) % GridSizeY;
+			int32 z = i / (GridSizeX * GridSizeY);
+			
+			// Mark immediate neighbors for update
+			for (int32 dx = -1; dx <= 1; ++dx)
+			{
+				for (int32 dy = -1; dy <= 1; ++dy)
+				{
+					for (int32 dz = -1; dz <= 1; ++dz)
+					{
+						if (dx == 0 && dy == 0 && dz == 0) continue;
+						
+						const int32 nx = x + dx;
+						const int32 ny = y + dy;
+						const int32 nz = z + dz;
+						
+						if (IsValidCell(nx, ny, nz))
+						{
+							const int32 NeighborIdx = GetCellIndex(nx, ny, nz);
+							if (NeighborIdx != -1 && !CellNeedsUpdate[NeighborIdx])
+							{
+								if (Cells[NeighborIdx].FluidLevel > MinFluidLevel)
+								{
+									CellNeedsUpdate[NeighborIdx] = true;
+									ActiveCellCount++;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 void UCAFluidGrid::MarkCellForUpdate(int32 X, int32 Y, int32 Z)
 {
 	const int32 Idx = GetCellIndex(X, Y, Z);
@@ -1360,3 +1452,585 @@ void UCAFluidGrid::ApplyDiagonalFlow(float DeltaTime)
 		}
 	}
 }*/
+
+// Advanced Settling Methods Implementation
+
+void UCAFluidGrid::UpdateSleepChains()
+{
+	if (!bUseSleepChains)
+		return;
+
+	// Clear existing chains
+	SleepChains.Empty();
+	CellToChainMap.Empty();
+	NextChainId = 0;
+
+	// Build new sleep chains from settled cells
+	TArray<bool> Visited;
+	Visited.SetNum(Cells.Num());
+	for (int32 i = 0; i < Visited.Num(); ++i)
+	{
+		Visited[i] = false;
+	}
+
+	// Find and create sleep chains
+	for (int32 z = 0; z < GridSizeZ; ++z)
+	{
+		for (int32 y = 0; y < GridSizeY; ++y)
+		{
+			for (int32 x = 0; x < GridSizeX; ++x)
+			{
+				const int32 Idx = GetCellIndex(x, y, z);
+				if (Idx == -1 || Visited[Idx])
+					continue;
+
+				const FCAFluidCell& Cell = Cells[Idx];
+				if (Cell.bSettled && Cell.FluidLevel > MinFluidLevel)
+				{
+					// Start a new sleep chain from this cell
+					CreateSleepChain(x, y, z);
+					Visited[Idx] = true;
+				}
+			}
+		}
+	}
+
+	// Merge nearby chains
+	for (int32 i = 0; i < SleepChains.Num(); ++i)
+	{
+		for (int32 j = i + 1; j < SleepChains.Num(); ++j)
+		{
+			const FSleepChain& Chain1 = SleepChains[i];
+			const FSleepChain& Chain2 = SleepChains[j];
+
+			// Check if chains are close enough to merge
+			const float Distance = FVector(Chain1.MinBounds - Chain2.MaxBounds).Size();
+			if (Distance <= SleepChainMergeDistance)
+			{
+				MergeSleepChains(i, j);
+			}
+		}
+	}
+}
+
+void UCAFluidGrid::UpdateSleepChainsOptimized()
+{
+	if (!bUseSleepChains)
+		return;
+
+	// Only rebuild chains if significant changes occurred
+	static int32 FramesSinceRebuild = 0;
+	static int32 LastSettledCount = 0;
+	
+	const int32 CurrentSettledCount = TotalSettledCells;
+	const bool bSignificantChange = FMath::Abs(CurrentSettledCount - LastSettledCount) > (Cells.Num() * 0.01f); // 1% change threshold
+	
+	if (!bSignificantChange && FramesSinceRebuild < 60) // Rebuild at most every 60 frames
+	{
+		FramesSinceRebuild++;
+		return;
+	}
+	
+	FramesSinceRebuild = 0;
+	LastSettledCount = CurrentSettledCount;
+	
+	// Clear and rebuild chains
+	SleepChains.Empty();
+	CellToChainMap.Empty();
+	NextChainId = 0;
+
+	// Use a more efficient single-pass approach
+	TArray<int32> SettledCells;
+	SettledCells.Reserve(CurrentSettledCount);
+	
+	for (int32 i = 0; i < Cells.Num(); ++i)
+	{
+		if (Cells[i].bSettled && Cells[i].FluidLevel > MinFluidLevel)
+		{
+			SettledCells.Add(i);
+		}
+	}
+	
+	// Create one chain for all settled cells (simplified approach)
+	if (SettledCells.Num() > 0)
+	{
+		FSleepChain MainChain;
+		MainChain.ChainId = NextChainId++;
+		MainChain.bFullySleeping = true;
+		MainChain.LastActivityTime = 0.0f;
+		MainChain.CellIndices = SettledCells;
+		
+		// Calculate bounds
+		MainChain.MinBounds = FIntVector(GridSizeX, GridSizeY, GridSizeZ);
+		MainChain.MaxBounds = FIntVector(0, 0, 0);
+		
+		for (int32 CellIdx : SettledCells)
+		{
+			int32 x = CellIdx % GridSizeX;
+			int32 y = (CellIdx / GridSizeX) % GridSizeY;
+			int32 z = CellIdx / (GridSizeX * GridSizeY);
+			
+			MainChain.MinBounds.X = FMath::Min(MainChain.MinBounds.X, x);
+			MainChain.MinBounds.Y = FMath::Min(MainChain.MinBounds.Y, y);
+			MainChain.MinBounds.Z = FMath::Min(MainChain.MinBounds.Z, z);
+			MainChain.MaxBounds.X = FMath::Max(MainChain.MaxBounds.X, x);
+			MainChain.MaxBounds.Y = FMath::Max(MainChain.MaxBounds.Y, y);
+			MainChain.MaxBounds.Z = FMath::Max(MainChain.MaxBounds.Z, z);
+			
+			CellToChainMap.Add(CellIdx, 0);
+		}
+		
+		SleepChains.Add(MainChain);
+	}
+}
+
+void UCAFluidGrid::CreateSleepChain(int32 StartX, int32 StartY, int32 StartZ)
+{
+	FSleepChain NewChain;
+	NewChain.ChainId = NextChainId++;
+	NewChain.bFullySleeping = true;
+	NewChain.LastActivityTime = 0.0f;
+	NewChain.MinBounds = FIntVector(StartX, StartY, StartZ);
+	NewChain.MaxBounds = FIntVector(StartX, StartY, StartZ);
+
+	// Flood fill to find all connected settled cells
+	TArray<FIntVector> ToProcess;
+	TSet<int32> ProcessedIndices;
+	ToProcess.Add(FIntVector(StartX, StartY, StartZ));
+
+	while (ToProcess.Num() > 0)
+	{
+		const FIntVector Current = ToProcess.Pop();
+		const int32 CurrentIdx = GetCellIndex(Current.X, Current.Y, Current.Z);
+		
+		if (CurrentIdx == -1 || ProcessedIndices.Contains(CurrentIdx))
+			continue;
+
+		ProcessedIndices.Add(CurrentIdx);
+		const FCAFluidCell& Cell = Cells[CurrentIdx];
+
+		if (Cell.bSettled && Cell.FluidLevel > MinFluidLevel)
+		{
+			// Add to chain
+			NewChain.CellIndices.Add(CurrentIdx);
+			CellToChainMap.Add(CurrentIdx, SleepChains.Num());
+
+			// Update bounds
+			NewChain.MinBounds.X = FMath::Min(NewChain.MinBounds.X, Current.X);
+			NewChain.MinBounds.Y = FMath::Min(NewChain.MinBounds.Y, Current.Y);
+			NewChain.MinBounds.Z = FMath::Min(NewChain.MinBounds.Z, Current.Z);
+			NewChain.MaxBounds.X = FMath::Max(NewChain.MaxBounds.X, Current.X);
+			NewChain.MaxBounds.Y = FMath::Max(NewChain.MaxBounds.Y, Current.Y);
+			NewChain.MaxBounds.Z = FMath::Max(NewChain.MaxBounds.Z, Current.Z);
+
+			// Add neighbors to process
+			for (int32 dx = -1; dx <= 1; ++dx)
+			{
+				for (int32 dy = -1; dy <= 1; ++dy)
+				{
+					for (int32 dz = -1; dz <= 1; ++dz)
+					{
+						if (dx == 0 && dy == 0 && dz == 0)
+							continue;
+
+						const FIntVector Neighbor(Current.X + dx, Current.Y + dy, Current.Z + dz);
+						if (IsValidCell(Neighbor.X, Neighbor.Y, Neighbor.Z))
+						{
+							ToProcess.Add(Neighbor);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if (NewChain.CellIndices.Num() > 0)
+	{
+		SleepChains.Add(NewChain);
+	}
+}
+
+void UCAFluidGrid::MergeSleepChains(int32 Chain1Index, int32 Chain2Index)
+{
+	if (Chain1Index >= SleepChains.Num() || Chain2Index >= SleepChains.Num())
+		return;
+
+	FSleepChain& Chain1 = SleepChains[Chain1Index];
+	FSleepChain& Chain2 = SleepChains[Chain2Index];
+
+	// Merge Chain2 into Chain1
+	Chain1.CellIndices.Append(Chain2.CellIndices);
+	
+	// Update bounds
+	Chain1.MinBounds.X = FMath::Min(Chain1.MinBounds.X, Chain2.MinBounds.X);
+	Chain1.MinBounds.Y = FMath::Min(Chain1.MinBounds.Y, Chain2.MinBounds.Y);
+	Chain1.MinBounds.Z = FMath::Min(Chain1.MinBounds.Z, Chain2.MinBounds.Z);
+	Chain1.MaxBounds.X = FMath::Max(Chain1.MaxBounds.X, Chain2.MaxBounds.X);
+	Chain1.MaxBounds.Y = FMath::Max(Chain1.MaxBounds.Y, Chain2.MaxBounds.Y);
+	Chain1.MaxBounds.Z = FMath::Max(Chain1.MaxBounds.Z, Chain2.MaxBounds.Z);
+
+	// Update cell-to-chain mapping
+	for (int32 CellIdx : Chain2.CellIndices)
+	{
+		CellToChainMap[CellIdx] = Chain1Index;
+	}
+
+	// Remove Chain2
+	SleepChains.RemoveAt(Chain2Index);
+}
+
+void UCAFluidGrid::WakeUpSleepChain(int32 ChainIndex)
+{
+	if (ChainIndex < 0 || ChainIndex >= SleepChains.Num())
+		return;
+
+	FSleepChain& Chain = SleepChains[ChainIndex];
+	Chain.bFullySleeping = false;
+	Chain.LastActivityTime = 0.0f;
+
+	// Wake up all cells in the chain
+	for (int32 CellIdx : Chain.CellIndices)
+	{
+		if (CellIdx >= 0 && CellIdx < Cells.Num())
+		{
+			NextCells[CellIdx].bSettled = false;
+			NextCells[CellIdx].SettledCounter = 0;
+			CellNeedsUpdate[CellIdx] = true;
+			
+			// Set hysteresis to prevent immediate re-settling
+			if (UnsettleCountdown.IsValidIndex(CellIdx))
+			{
+				UnsettleCountdown[CellIdx] = HysteresisFrames;
+			}
+		}
+	}
+
+	// Wake up neighboring chains if they're close
+	for (int32 i = 0; i < SleepChains.Num(); ++i)
+	{
+		if (i == ChainIndex)
+			continue;
+
+		const FSleepChain& OtherChain = SleepChains[i];
+		const float Distance = FVector(Chain.MinBounds - OtherChain.MaxBounds).Size();
+		if (Distance <= 2.0f)
+		{
+			WakeUpSleepChain(i);
+		}
+	}
+}
+
+bool UCAFluidGrid::IsCellInSleepChain(int32 CellIndex) const
+{
+	return CellToChainMap.Contains(CellIndex);
+}
+
+// Predictive Settling Implementation
+
+void UCAFluidGrid::UpdateSettlingPrediction()
+{
+	if (!bUsePredictiveSettling)
+		return;
+
+	// Update fluid change history
+	UpdateFluidChangeHistory();
+
+	// Calculate settling confidence for each cell
+	for (int32 i = 0; i < Cells.Num(); ++i)
+	{
+		const FCAFluidCell& Cell = Cells[i];
+		
+		if (Cell.FluidLevel > MinFluidLevel && !Cell.bIsSolid)
+		{
+			// Calculate change rate over history
+			float TotalChange = 0.0f;
+			int32 HistoryOffset = i * HistoryFrameCount;
+			
+			for (int32 h = 0; h < HistoryFrameCount - 1; ++h)
+			{
+				if (HistoryOffset + h + 1 < FluidChangeHistory.Num())
+				{
+					TotalChange += FMath::Abs(FluidChangeHistory[HistoryOffset + h + 1] - 
+											  FluidChangeHistory[HistoryOffset + h]);
+				}
+			}
+
+			// Calculate exponential decay confidence
+			if (TotalChange < SettlingChangeThreshold * HistoryFrameCount)
+			{
+				// Fluid is barely changing, high confidence it will settle
+				SettlingConfidence[i] = FMath::Min(SettlingConfidence[i] + 0.2f, 1.0f);
+			}
+			else
+			{
+				// Still changing, reduce confidence
+				SettlingConfidence[i] = FMath::Max(SettlingConfidence[i] - 0.1f, 0.0f);
+			}
+
+			// Predictively settle if confidence is high enough
+			if (SettlingConfidence[i] >= PredictiveSettlingConfidenceThreshold && !Cell.bSettled)
+			{
+				// Check hysteresis
+				if (UnsettleCountdown.IsValidIndex(i) && UnsettleCountdown[i] <= 0)
+				{
+					NextCells[i].bSettled = true;
+					NextCells[i].SettledCounter = SettledThreshold;
+				}
+			}
+		}
+		else
+		{
+			SettlingConfidence[i] = 0.0f;
+		}
+	}
+}
+
+float UCAFluidGrid::PredictSettlingTime(int32 CellIndex) const
+{
+	if (!bUsePredictiveSettling || CellIndex < 0 || CellIndex >= Cells.Num())
+		return -1.0f;
+
+	// Based on current settling confidence, predict frames until settled
+	const float Confidence = SettlingConfidence[CellIndex];
+	if (Confidence >= PredictiveSettlingConfidenceThreshold)
+	{
+		return 0.0f; // Will settle immediately
+	}
+	else if (Confidence > 0.5f)
+	{
+		// Estimate based on confidence growth rate
+		const float FramesNeeded = (PredictiveSettlingConfidenceThreshold - Confidence) / 0.2f;
+		return FramesNeeded;
+	}
+
+	return -1.0f; // Cannot predict
+}
+
+void UCAFluidGrid::UpdateFluidChangeHistory()
+{
+	const int32 RequiredSize = Cells.Num() * HistoryFrameCount;
+	if (FluidChangeHistory.Num() != RequiredSize)
+	{
+		FluidChangeHistory.SetNum(RequiredSize);
+		SettlingConfidence.SetNum(Cells.Num());
+		UnsettleCountdown.SetNum(Cells.Num());
+		
+		// Initialize
+		for (int32 i = 0; i < Cells.Num(); ++i)
+		{
+			SettlingConfidence[i] = 0.0f;
+			UnsettleCountdown[i] = 0;
+			
+			for (int32 h = 0; h < HistoryFrameCount; ++h)
+			{
+				FluidChangeHistory[i * HistoryFrameCount + h] = Cells[i].FluidLevel;
+			}
+		}
+	}
+
+	// Shift history and add current frame
+	for (int32 i = 0; i < Cells.Num(); ++i)
+	{
+		int32 HistoryOffset = i * HistoryFrameCount;
+		
+		// Shift old values
+		for (int32 h = 0; h < HistoryFrameCount - 1; ++h)
+		{
+			FluidChangeHistory[HistoryOffset + h] = FluidChangeHistory[HistoryOffset + h + 1];
+		}
+		
+		// Add current value
+		FluidChangeHistory[HistoryOffset + HistoryFrameCount - 1] = Cells[i].FluidLevel;
+		
+		// Update hysteresis countdown
+		if (UnsettleCountdown[i] > 0)
+		{
+			UnsettleCountdown[i]--;
+		}
+	}
+}
+
+bool UCAFluidGrid::ShouldPredictiveSettle(int32 X, int32 Y, int32 Z) const
+{
+	if (!bUsePredictiveSettling)
+		return false;
+
+	const int32 Idx = GetCellIndex(X, Y, Z);
+	if (Idx == -1 || Idx >= SettlingConfidence.Num())
+		return false;
+
+	return SettlingConfidence[Idx] >= PredictiveSettlingConfidenceThreshold;
+}
+
+// Memory Optimization Methods Implementation
+
+void UCAFluidGrid::EnableCompressedMode(bool bEnable)
+{
+	if (bUseCompressedStorage == bEnable)
+		return;
+	
+	bUseCompressedStorage = bEnable;
+	
+	if (bEnable)
+	{
+		CompressCells();
+	}
+	else
+	{
+		DecompressCells();
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Fluid Grid Compression %s. Memory usage: %d KB"), 
+		bEnable ? TEXT("Enabled") : TEXT("Disabled"), 
+		GetCompressedMemorySize() / 1024);
+}
+
+void UCAFluidGrid::CompressCells()
+{
+	const int32 TotalCells = GridSizeX * GridSizeY * GridSizeZ;
+	
+	// Allocate compressed arrays
+	CompressedFluidLevels.SetNum(TotalCells);
+	CompressedFlags.SetNum(TotalCells);
+	CompressedSettledCounters.SetNum(TotalCells);
+	
+	// Compress cell data
+	for (int32 i = 0; i < TotalCells; ++i)
+	{
+		const FCAFluidCell& Cell = Cells[i];
+		
+		// Quantize fluid level to 16-bit
+		CompressedFluidLevels[i] = (uint16)(FMath::Clamp(Cell.FluidLevel, 0.0f, 1.0f) * 65535.0f);
+		
+		// Pack flags into single byte
+		uint8 Flags = 0;
+		if (Cell.bIsSolid) Flags |= 0x01;
+		if (Cell.bSettled) Flags |= 0x02;
+		if (Cell.bSourceBlock) Flags |= 0x04;
+		CompressedFlags[i] = Flags;
+		
+		// Compress settled counter to 8-bit
+		CompressedSettledCounters[i] = (uint8)FMath::Min(Cell.SettledCounter, 255);
+	}
+	
+	// Clear uncompressed data to save memory
+	if (bUseCompressedStorage)
+	{
+		// Keep minimal data in Cells for interface compatibility
+		for (FCAFluidCell& Cell : Cells)
+		{
+			Cell.TerrainHeight = 0.0f;  // Keep only essential data
+			Cell.LastFluidLevel = 0.0f;
+		}
+	}
+}
+
+void UCAFluidGrid::DecompressCells()
+{
+	if (CompressedFluidLevels.Num() == 0)
+		return;
+	
+	const int32 TotalCells = GridSizeX * GridSizeY * GridSizeZ;
+	
+	// Decompress cell data
+	for (int32 i = 0; i < TotalCells; ++i)
+	{
+		FCAFluidCell& Cell = Cells[i];
+		
+		// Decompress fluid level
+		Cell.FluidLevel = (float)CompressedFluidLevels[i] / 65535.0f;
+		
+		// Unpack flags
+		const uint8 Flags = CompressedFlags[i];
+		Cell.bIsSolid = (Flags & 0x01) != 0;
+		Cell.bSettled = (Flags & 0x02) != 0;
+		Cell.bSourceBlock = (Flags & 0x04) != 0;
+		
+		// Decompress settled counter
+		Cell.SettledCounter = CompressedSettledCounters[i];
+		
+		// Restore last fluid level
+		Cell.LastFluidLevel = Cell.FluidLevel;
+	}
+	
+	// Clear compressed arrays if not using compressed mode
+	if (!bUseCompressedStorage)
+	{
+		CompressedFluidLevels.Empty();
+		CompressedFlags.Empty();
+		CompressedSettledCounters.Empty();
+	}
+}
+
+int32 UCAFluidGrid::GetCompressedMemorySize() const
+{
+	int32 MemorySize = 0;
+	
+	if (bUseCompressedStorage)
+	{
+		// Compressed storage
+		MemorySize += CompressedFluidLevels.Num() * sizeof(uint16);     // 2 bytes per cell
+		MemorySize += CompressedFlags.Num();                            // 1 byte per cell
+		MemorySize += CompressedSettledCounters.Num();                  // 1 byte per cell
+		// Total: 4 bytes per cell
+	}
+	else
+	{
+		// Uncompressed storage
+		MemorySize += Cells.Num() * sizeof(FCAFluidCell);               // ~44 bytes per cell
+		MemorySize += NextCells.Num() * sizeof(FCAFluidCell);           // ~44 bytes per cell
+	}
+	
+	// Additional arrays
+	MemorySize += CellNeedsUpdate.Num() * sizeof(bool);
+	MemorySize += FluidChangeHistory.Num() * sizeof(float);
+	MemorySize += SettlingConfidence.Num() * sizeof(float);
+	MemorySize += UnsettleCountdown.Num() * sizeof(int32);
+	
+	// Sleep chains
+	for (const FSleepChain& Chain : SleepChains)
+	{
+		MemorySize += Chain.CellIndices.Num() * sizeof(int32);
+	}
+	MemorySize += CellToChainMap.Num() * (sizeof(int32) * 2);  // Key-value pairs
+	
+	return MemorySize;
+}
+
+void UCAFluidGrid::OptimizeMemoryLayout()
+{
+	// This function reorganizes memory for better cache locality
+	// Currently using linear layout, but could implement Morton encoding (Z-order curve)
+	
+	// Pre-allocate vectors with exact sizes to avoid reallocation
+	const int32 TotalCells = GridSizeX * GridSizeY * GridSizeZ;
+	
+	if (Cells.Num() != TotalCells)
+	{
+		Cells.SetNum(TotalCells);
+		NextCells.SetNum(TotalCells);
+		CellNeedsUpdate.SetNum(TotalCells);
+	}
+	
+	// Shrink arrays to fit
+	Cells.Shrink();
+	NextCells.Shrink();
+	CellNeedsUpdate.Shrink();
+	FluidChangeHistory.Shrink();
+	SettlingConfidence.Shrink();
+	UnsettleCountdown.Shrink();
+	
+	if (bUseCompressedStorage)
+	{
+		CompressedFluidLevels.Shrink();
+		CompressedFlags.Shrink();
+		CompressedSettledCounters.Shrink();
+	}
+	
+	// Log memory usage
+	const int32 TotalMemory = GetCompressedMemorySize();
+	const float MemoryPerCell = (float)TotalMemory / (float)TotalCells;
+	
+	UE_LOG(LogTemp, Log, TEXT("Fluid Grid Memory Optimized: Total %d KB, %.1f bytes per cell"), 
+		TotalMemory / 1024, MemoryPerCell);
+}

@@ -193,6 +193,25 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float EvaporationRate = 0.0f;
 	
+	// Optimization settings
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
+	bool bUseSleepChains = true;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
+	bool bUsePredictiveSettling = true;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
+	bool bUseOptimizedParallelProcessing = true;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
+	float SleepChainMergeDistance = 3.0f;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
+	float PredictiveSettlingConfidenceThreshold = 0.95f;
+	
+	// Enable memory compression for fluid cells
+	void EnableCompressedMode(bool bEnable);
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bShowChunkBorders = false;
 	

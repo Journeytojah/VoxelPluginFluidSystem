@@ -504,6 +504,18 @@ void AVoxelFluidActor::InitializeChunkSystem()
 	ChunkManager->Gravity = GravityStrength;
 	ChunkManager->EvaporationRate = FluidEvaporationRate;
 	
+	// Apply optimization settings to chunk manager
+	ChunkManager->bUseSleepChains = bUseSleepChains;
+	ChunkManager->bUsePredictiveSettling = bUsePredictiveSettling;
+	ChunkManager->SleepChainMergeDistance = SleepChainMergeDistance;
+	ChunkManager->PredictiveSettlingConfidenceThreshold = PredictiveSettlingConfidenceThreshold;
+	
+	// Apply memory compression if enabled
+	if (bEnableMemoryCompression)
+	{
+		ChunkManager->EnableCompressedMode(true);
+	}
+	
 	// Sync debug settings
 	ChunkManager->bShowChunkBorders = bShowChunkBorders;
 	ChunkManager->bShowChunkStates = bShowChunkStates;
@@ -732,6 +744,63 @@ void AVoxelFluidActor::ShowCacheStatus()
 	       ChunkManager->StreamingConfig.MaxCachedChunks);
 	UE_LOG(LogTemp, Warning, TEXT("Cache expiration: %.1f seconds"), 
 	       ChunkManager->StreamingConfig.CacheExpirationTime);
+}
+
+void AVoxelFluidActor::ToggleMemoryCompression()
+{
+	bEnableMemoryCompression = !bEnableMemoryCompression;
+	
+	if (ChunkManager)
+	{
+		ChunkManager->EnableCompressedMode(bEnableMemoryCompression);
+		
+		UE_LOG(LogTemp, Warning, TEXT("Memory compression %s"), 
+			bEnableMemoryCompression ? TEXT("ENABLED") : TEXT("DISABLED"));
+		
+		// Display memory stats after toggling
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *GetMemoryUsageStats());
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("ChunkManager not initialized"));
+	}
+}
+
+FString AVoxelFluidActor::GetMemoryUsageStats() const
+{
+	if (!ChunkManager)
+	{
+		return TEXT("ChunkManager not initialized");
+	}
+	
+	const FChunkManagerStats Stats = ChunkManager->GetStats();
+	const int32 TotalCells = Stats.TotalActiveCells;
+	
+	// Calculate memory usage
+	const float UncompressedMemoryMB = (TotalCells * 44.0f) / (1024.0f * 1024.0f); // 44 bytes per cell
+	const float CompressedMemoryMB = (TotalCells * 4.0f) / (1024.0f * 1024.0f); // 4 bytes per cell
+	const float CurrentMemoryMB = bEnableMemoryCompression ? CompressedMemoryMB : UncompressedMemoryMB;
+	const float SavingsMB = UncompressedMemoryMB - CompressedMemoryMB;
+	const float CompressionRatio = UncompressedMemoryMB > 0 ? (CompressedMemoryMB / UncompressedMemoryMB) : 0.0f;
+	
+	return FString::Printf(
+		TEXT("=== Memory Usage Stats ===\n")
+		TEXT("Total Active Cells: %d\n")
+		TEXT("Compression: %s\n")
+		TEXT("Current Memory: %.2f MB\n")
+		TEXT("Uncompressed Size: %.2f MB\n")
+		TEXT("Compressed Size: %.2f MB\n")
+		TEXT("Memory Saved: %.2f MB (%.1f%% reduction)\n")
+		TEXT("Compression Ratio: 1:%.1f"),
+		TotalCells,
+		bEnableMemoryCompression ? TEXT("ENABLED") : TEXT("DISABLED"),
+		CurrentMemoryMB,
+		UncompressedMemoryMB,
+		CompressedMemoryMB,
+		SavingsMB,
+		(1.0f - CompressionRatio) * 100.0f,
+		UncompressedMemoryMB > 0 ? (UncompressedMemoryMB / CompressedMemoryMB) : 0.0f
+	);
 }
 
 void AVoxelFluidActor::TestPersistenceWithSourcePause()

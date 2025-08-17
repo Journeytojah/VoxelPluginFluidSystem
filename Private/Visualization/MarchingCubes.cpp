@@ -888,33 +888,4 @@ void FMarchingCubes::GenerateHighResChunkMesh(UFluidChunk* FluidChunk, UFluidChu
     }
 }
 
-void FMarchingCubes::ProcessBoundaryCube(UFluidChunk* FluidChunk, UFluidChunkManager* ChunkManager,
-                                       int32 X, int32 Y, int32 Z,
-                                       int32 ResolutionMultiplier, float HighResCellSize,
-                                       const FVector& ChunkOrigin, float IsoLevel,
-                                       TArray<FMarchingCubesVertex>& OutVertices,
-                                       TArray<FMarchingCubesTriangle>& OutTriangles)
-{
-    FCubeConfiguration Config;
-    const FVector CubeOrigin = ChunkOrigin + FVector(X, Y, Z) * HighResCellSize;
-    
-    bool bHasValidDensity = false;
-    for (int32 CornerIndex = 0; CornerIndex < 8; ++CornerIndex)
-    {
-        const FVector RelativeCorner = CubeCorners[CornerIndex];
-        Config.Positions[CornerIndex] = CubeOrigin + RelativeCorner * HighResCellSize;
-        
-        FVector LocalPos = FVector(X, Y, Z) + RelativeCorner;
-        LocalPos /= ResolutionMultiplier;
-        
-        Config.DensityValues[CornerIndex] = SampleDensityInterpolated(FluidChunk, ChunkManager, LocalPos);
-        
-        if (Config.DensityValues[CornerIndex] > 0.0f)
-            bHasValidDensity = true;
-    }
-    
-    if (bHasValidDensity)
-    {
-        GenerateCube(Config, IsoLevel, OutVertices, OutTriangles);
-    }
-}
+// ProcessBoundaryCube implementation moved to MarchingCubesBoundary.cpp to avoid duplicate symbol

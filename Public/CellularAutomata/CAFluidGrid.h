@@ -42,6 +42,34 @@ struct VOXELFLUIDSYSTEM_API FCAFluidCell
 	}
 };
 
+// Sleep chain for grouped settling optimization
+USTRUCT()
+struct FSleepChain
+{
+	GENERATED_BODY()
+
+	TArray<int32> CellIndices;
+	FIntVector MinBounds;
+	FIntVector MaxBounds;
+	float LastActivityTime;
+	bool bFullySleeping;
+	int32 ChainId;
+
+	FSleepChain()
+	{
+		LastActivityTime = 0.0f;
+		bFullySleeping = false;
+		ChainId = -1;
+	}
+
+	bool ContainsCell(int32 X, int32 Y, int32 Z) const
+	{
+		return X >= MinBounds.X && X <= MaxBounds.X &&
+		       Y >= MinBounds.Y && Y <= MaxBounds.Y &&
+		       Z >= MinBounds.Z && Z <= MaxBounds.Z;
+	}
+};
+
 UCLASS(BlueprintType, Blueprintable)
 class VOXELFLUIDSYSTEM_API UCAFluidGrid : public UObject
 {
@@ -138,6 +166,22 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
 	float SettlingChangeThreshold = 0.0001f;
 
+	// Advanced settling parameters
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings|Advanced Settling")
+	bool bUseSleepChains = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings|Advanced Settling")
+	float SleepChainMergeDistance = 3.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings|Advanced Settling")
+	bool bUsePredictiveSettling = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings|Advanced Settling")
+	float PredictiveSettlingConfidenceThreshold = 0.95f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings|Advanced Settling")
+	float WakeThresholdMultiplier = 2.0f;  // Wake if change > threshold * multiplier
+
 	TArray<FCAFluidCell> Cells;
 	TArray<FCAFluidCell> NextCells;
 	
@@ -145,6 +189,20 @@ public:
 	TArray<bool> CellNeedsUpdate;
 	int32 ActiveCellCount = 0;
 	int32 TotalSettledCells = 0;
+
+	// Advanced settling - Sleep chains
+	TArray<FSleepChain> SleepChains;
+	TMap<int32, int32> CellToChainMap;  // Maps cell index to chain index
+	int32 NextChainId = 0;
+
+	// Predictive settling
+	TArray<float> FluidChangeHistory;  // Track last 3 frames of changes per cell
+	TArray<float> SettlingConfidence;  // Confidence that cell will settle soon
+	int32 HistoryFrameCount = 3;
+
+	// Settling hysteresis to prevent rapid settle/unsettle
+	TArray<int32> UnsettleCountdown;  // Frames before cell can settle again after waking
+	int32 HysteresisFrames = 10;
 
 	FVector GridOrigin;
 
@@ -161,13 +219,42 @@ protected:
 	
 	// Settling optimization methods
 	void InitializeUpdateFlags();
+	void InitializeUpdateFlagsOptimized();
 	void MarkCellForUpdate(int32 X, int32 Y, int32 Z);
 	void WakeUpNeighbors(int32 X, int32 Y, int32 Z);
 	bool ShouldUpdateCell(int32 X, int32 Y, int32 Z) const;
 	bool CanCellSettle(int32 X, int32 Y, int32 Z) const;
 	void PropagateWakeUp(int32 X, int32 Y, int32 Z, int32 Distance = 2);
+
+	// Advanced settling methods
+	void UpdateSleepChains();
+	void UpdateSleepChainsOptimized();
+	void CreateSleepChain(int32 StartX, int32 StartY, int32 StartZ);
+	void MergeSleepChains(int32 Chain1, int32 Chain2);
+	void WakeUpSleepChain(int32 ChainIndex);
+	bool IsCellInSleepChain(int32 CellIndex) const;
+
+	// Predictive settling
+	void UpdateSettlingPrediction();
+	float PredictSettlingTime(int32 CellIndex) const;
+	void UpdateFluidChangeHistory();
+	bool ShouldPredictiveSettle(int32 X, int32 Y, int32 Z) const;
+	
+	// Memory optimization methods
+	void EnableCompressedMode(bool bEnable);
+	void CompressCells();
+	void DecompressCells();
+	int32 GetCompressedMemorySize() const;
+	void OptimizeMemoryLayout();
 	
 	float GetStableFluidLevel(int32 X, int32 Y, int32 Z) const;
 	bool CanFlowInto(int32 X, int32 Y, int32 Z) const;
 	void DistributeWater(int32 X, int32 Y, int32 Z, float Amount);
+	
+private:
+	// Compressed storage for memory optimization
+	bool bUseCompressedStorage = false;
+	TArray<uint16> CompressedFluidLevels;
+	TArray<uint8> CompressedFlags;
+	TArray<uint8> CompressedSettledCounters;
 };
