@@ -357,7 +357,7 @@ void FSparseFluidGrid::ConvertToSparse(
 			FSparseCell SparseCell;
 			SparseCell.Index = i;
 			SparseCell.FluidLevel = DenseCells[i].FluidLevel;
-			SparseCell.Pressure = DenseCells[i].Pressure;
+			SparseCell.Pressure = 0.0f;  // CA fluid doesn't use pressure
 			SparseCell.bSettled = DenseCells[i].bSettled;
 			
 			const int32 SparseIdx = SparseCells.Add(SparseCell);
@@ -379,7 +379,7 @@ void FSparseFluidGrid::ConvertToDense(
 	for (int32 i = 0; i < TotalCells; ++i)
 	{
 		DenseCells[i].FluidLevel = 0.0f;
-		DenseCells[i].Pressure = 0.0f;
+		// CA fluid doesn't have pressure field
 	}
 	
 	// Copy sparse cells back
@@ -388,7 +388,7 @@ void FSparseFluidGrid::ConvertToDense(
 		if (SparseCell.Index >= 0 && SparseCell.Index < TotalCells)
 		{
 			DenseCells[SparseCell.Index].FluidLevel = SparseCell.FluidLevel;
-			DenseCells[SparseCell.Index].Pressure = SparseCell.Pressure;
+			// Pressure is not used in CA fluid simulation
 			DenseCells[SparseCell.Index].bSettled = SparseCell.bSettled;
 		}
 	}
