@@ -323,3 +323,192 @@ void UStaticWaterManager::InvalidateChunkCache()
 {
 	CachedChunkData.Empty();
 }
+
+void UStaticWaterManager::CreateDynamicFluidSourcesInRadius(UFluidChunk* Chunk, const FVector& Center, float Radius) const
+{
+	if (!Chunk)
+		return;
+
+	UE_LOG(LogTemp, Warning, TEXT("CreateDynamicFluidSourcesInRadius: Chunk %s, StaticWaterRegions count: %d"), 
+		*Chunk->ChunkCoord.ToString(), StaticWaterRegions.Num());
+
+	int32 ActivatedSources = 0;
+	const float RadiusSquared = Radius * Radius;
+	
+	int32 CellsInRadius = 0;
+	int32 CellsShouldHaveWater = 0;
+	int32 CellsNotSolidOrHasWater = 0;
+	int32 CellsNearStaticWater = 0;
+	int32 CellsSolid = 0;
+	int32 CellsHaveWater = 0;
+	int32 CellsEmpty = 0;
+	
+	// Find the edges of static water bodies around the excavated area
+	for (int32 LocalZ = 0; LocalZ < Chunk->ChunkSize; LocalZ++)
+	{
+		for (int32 LocalY = 0; LocalY < Chunk->ChunkSize; LocalY++)
+		{
+			for (int32 LocalX = 0; LocalX < Chunk->ChunkSize; LocalX++)
+			{
+				FVector CellWorldPos = Chunk->GetWorldPositionFromLocal(LocalX, LocalY, LocalZ);
+				float DistanceSquared = FVector::DistSquared(CellWorldPos, Center);
+				
+				// Only process cells within the radius
+				if (DistanceSquared > RadiusSquared)
+					continue;
+				
+				CellsInRadius++;
+				
+				// Check if this position should have static water
+				float ExpectedWaterLevel = 0.0f;
+				if (!ShouldHaveStaticWaterAt(CellWorldPos, ExpectedWaterLevel))
+					continue;
+				
+				CellsShouldHaveWater++;
+				
+				int32 LinearIndex = Chunk->GetLocalCellIndex(LocalX, LocalY, LocalZ);
+				if (!Chunk->Cells.IsValidIndex(LinearIndex))
+					continue;
+				
+				FCAFluidCell& Cell = Chunk->Cells[LinearIndex];
+				
+				// Debug cell states
+				if (Cell.bIsSolid)
+				{
+					CellsSolid++;
+					continue;
+				}
+				
+				if (Cell.FluidLevel > 0.1f)
+					CellsHaveWater++;
+				else
+					CellsEmpty++;
+				
+				// We want to find excavated areas - cells that should have static water but don't
+				// OR cells near excavated areas that could be sources
+				bool bShouldActivate = false;
+				
+				if (Cell.FluidLevel < 0.1f)
+				{
+					// This cell is empty but should have water - it's excavated!
+					bShouldActivate = true;
+					CellsNotSolidOrHasWater++;
+				}
+				else if (Cell.bSourceBlock && Cell.FluidLevel > 0.8f)
+				{
+					// This cell has static water - check if it's near an excavated area
+					bShouldActivate = true;
+					CellsNotSolidOrHasWater++;
+				}
+				
+				if (!bShouldActivate)
+					continue;
+				
+				// Check if this is near the edge of existing static water (potential source point)
+				bool bNearStaticWater = false;
+				const int32 CheckRadius = 2;
+				
+				for (int32 CheckZ = -CheckRadius; CheckZ <= CheckRadius && !bNearStaticWater; CheckZ++)
+				{
+					for (int32 CheckY = -CheckRadius; CheckY <= CheckRadius && !bNearStaticWater; CheckY++)
+					{
+						for (int32 CheckX = -CheckRadius; CheckX <= CheckRadius && !bNearStaticWater; CheckX++)
+						{
+							if (CheckX == 0 && CheckY == 0 && CheckZ == 0)
+								continue;
+							
+							int32 NeighborX = LocalX + CheckX;
+							int32 NeighborY = LocalY + CheckY;
+							int32 NeighborZ = LocalZ + CheckZ;
+							
+							// Check bounds
+							if (NeighborX < 0 || NeighborX >= Chunk->ChunkSize ||
+								NeighborY < 0 || NeighborY >= Chunk->ChunkSize ||
+								NeighborZ < 0 || NeighborZ >= Chunk->ChunkSize)
+								continue;
+							
+							int32 NeighborIndex = Chunk->GetLocalCellIndex(NeighborX, NeighborY, NeighborZ);
+							if (Chunk->Cells.IsValidIndex(NeighborIndex))
+							{
+								const FCAFluidCell& NeighborCell = Chunk->Cells[NeighborIndex];
+								if (NeighborCell.bSourceBlock && NeighborCell.FluidLevel > 0.8f)
+								{
+									bNearStaticWater = true;
+								}
+							}
+						}
+					}
+				}
+				
+				// Handle different cases
+				if (Cell.FluidLevel < 0.1f)
+				{
+					// Empty excavated cell - fill it directly and make it dynamic
+					Cell.FluidLevel = 1.0f;
+					Cell.bSettled = false;  // Make it dynamic so it flows
+					Cell.bSourceBlock = false;  // Not static yet
+					Cell.LastFluidLevel = 0.0f; // Mark as changed
+					ActivatedSources++;
+					CellsNearStaticWater++;
+				}
+				else if (Cell.bSourceBlock && bNearStaticWater)
+				{
+					// Static water cell near excavation - convert to dynamic source
+					Cell.bSettled = false;  // Make it dynamic
+					Cell.bSourceBlock = false;  // Not static yet  
+					Cell.LastFluidLevel = 0.0f; // Mark as changed
+					ActivatedSources++;
+					CellsNearStaticWater++;
+				}
+			}
+		}
+	}
+	
+	// Debug logging
+	UE_LOG(LogTemp, Warning, TEXT("CreateDynamicFluidSources Debug:"));
+	UE_LOG(LogTemp, Warning, TEXT("  CellsInRadius: %d"), CellsInRadius);
+	UE_LOG(LogTemp, Warning, TEXT("  CellsShouldHaveWater: %d"), CellsShouldHaveWater);
+	UE_LOG(LogTemp, Warning, TEXT("  CellsSolid: %d"), CellsSolid);
+	UE_LOG(LogTemp, Warning, TEXT("  CellsHaveWater: %d"), CellsHaveWater);
+	UE_LOG(LogTemp, Warning, TEXT("  CellsEmpty: %d"), CellsEmpty);
+	UE_LOG(LogTemp, Warning, TEXT("  CellsNotSolidOrHasWater: %d"), CellsNotSolidOrHasWater);
+	UE_LOG(LogTemp, Warning, TEXT("  CellsNearStaticWater: %d"), CellsNearStaticWater);
+	UE_LOG(LogTemp, Warning, TEXT("  ActivatedSources: %d"), ActivatedSources);
+	
+	if (ActivatedSources > 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("Activated %d dynamic fluid sources in chunk %s"), 
+			ActivatedSources, *Chunk->ChunkCoord.ToString());
+	}
+}
+
+bool UStaticWaterManager::ShouldHaveStaticWaterAt(const FVector& WorldPosition, float& OutWaterLevel) const
+{
+	OutWaterLevel = 0.0f;
+	
+	static int32 DebugCallCount = 0;
+	DebugCallCount++;
+	
+	for (int32 i = 0; i < StaticWaterRegions.Num(); i++)
+	{
+		const FStaticWaterRegion& Region = StaticWaterRegions[i];
+		bool bContains = Region.ContainsPoint(WorldPosition);
+		
+		// Debug first few calls
+		if (DebugCallCount <= 5)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("ShouldHaveStaticWaterAt: Position %s, Region %d bounds (%s to %s), WaterLevel=%.1f, Contains=%s"), 
+				*WorldPosition.ToString(), i,
+				*Region.Bounds.Min.ToString(), *Region.Bounds.Max.ToString(),
+				Region.WaterLevel, bContains ? TEXT("YES") : TEXT("NO"));
+		}
+		
+		if (bContains)
+		{
+			OutWaterLevel = Region.WaterLevel;
+			return true;
+		}
+	}
+	
+	return false;
+}

@@ -167,6 +167,10 @@ public:
 	
 	UFUNCTION(BlueprintCallable, Category = "Static Water")
 	const TArray<FStaticWaterRegion>& GetStaticWaterRegions() const { return StaticWaterRegions; }
+	
+	// Dynamic refill system functions
+	void CreateDynamicFluidSourcesInRadius(UFluidChunk* Chunk, const FVector& Center, float Radius) const;
+	bool ShouldHaveStaticWaterAt(const FVector& WorldPosition, float& OutWaterLevel) const;
 
 protected:
 	UPROPERTY()

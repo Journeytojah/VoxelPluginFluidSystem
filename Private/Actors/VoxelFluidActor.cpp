@@ -1409,3 +1409,240 @@ void AVoxelFluidActor::RetryStaticWaterApplication()
 	
 	UE_LOG(LogTemp, Log, TEXT("Retried static water application on %d chunks"), RetriedCount);
 }
+
+void AVoxelFluidActor::RefillStaticWaterInRadius(const FVector& Center, float Radius)
+{
+	if (!StaticWaterManager || !ChunkManager || !bEnableStaticWater)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Cannot refill static water - system not ready"));
+		return;
+	}
+	
+	// Find all chunks within the radius
+	FBox RefreshBounds(Center - FVector(Radius), Center + FVector(Radius));
+	TArray<FFluidChunkCoord> AffectedChunks = ChunkManager->GetChunksInBounds(RefreshBounds);
+	
+	int32 ActivatedChunks = 0;
+	int32 TotalActivatedSources = 0;
+	
+	UE_LOG(LogTemp, Log, TEXT("Creating dynamic fluid sources in radius %.1f around %s - checking %d chunks"), 
+		Radius, *Center.ToString(), AffectedChunks.Num());
+	
+	for (const FFluidChunkCoord& ChunkCoord : AffectedChunks)
+	{
+		UFluidChunk* Chunk = ChunkManager->GetChunk(ChunkCoord);
+		if (!Chunk)
+			continue;
+		
+		// Check if this chunk intersects any static water regions
+		FBox ChunkBounds = Chunk->GetWorldBounds();
+		if (!StaticWaterManager->ChunkIntersectsStaticWater(ChunkBounds))
+			continue;
+		
+		// Force terrain update for this specific chunk
+		if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
+		{
+			VoxelIntegration->UpdateTerrainForChunkCoord(Chunk->ChunkCoord);
+		}
+		
+		// Count active sources before
+		int32 SourcesBefore = 0;
+		for (int32 i = 0; i < Chunk->Cells.Num(); i++)
+		{
+			if (!Chunk->Cells[i].bSourceBlock && Chunk->Cells[i].FluidLevel > 0.5f)
+			{
+				SourcesBefore++;
+			}
+		}
+		
+		// Create dynamic fluid sources around the excavated area
+		StaticWaterManager->CreateDynamicFluidSourcesInRadius(Chunk, Center, Radius);
+		
+		// Count active sources after
+		int32 SourcesAfter = 0;
+		for (int32 i = 0; i < Chunk->Cells.Num(); i++)
+		{
+			if (!Chunk->Cells[i].bSourceBlock && Chunk->Cells[i].FluidLevel > 0.5f)
+			{
+				SourcesAfter++;
+			}
+		}
+		
+		int32 NewSources = SourcesAfter - SourcesBefore;
+		if (NewSources > 0)
+		{
+			TotalActivatedSources += NewSources;
+			ActivatedChunks++;
+			
+			// Activate the chunk for simulation
+			Chunk->bFullySettled = false;
+			Chunk->bDirty = true;
+		}
+	}
+	
+	// Start fluid settling monitoring
+	if (TotalActivatedSources > 0)
+	{
+		StartDynamicToStaticConversion(Center, Radius);
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Dynamic fluid refill complete: %d chunks activated, %d fluid sources created"), 
+		ActivatedChunks, TotalActivatedSources);
+}
+
+void AVoxelFluidActor::StartDynamicToStaticConversion(const FVector& Center, float Radius)
+{
+	// Schedule conversion after settling time
+	FTimerHandle ConversionTimerHandle;
+	GetWorld()->GetTimerManager().SetTimer(ConversionTimerHandle, [this, Center, Radius]()
+	{
+		ConvertSettledFluidToStatic(Center, Radius);
+	}, DynamicToStaticSettleTime, false);
+	
+	UE_LOG(LogTemp, Log, TEXT("Scheduled dynamic-to-static conversion in %.1f seconds for radius %.1f around %s"), 
+		DynamicToStaticSettleTime, Radius, *Center.ToString());
+}
+
+void AVoxelFluidActor::ConvertSettledFluidToStatic(const FVector& Center, float Radius)
+{
+	if (!StaticWaterManager || !ChunkManager || !bEnableStaticWater)
+	{
+		return;
+	}
+	
+	// Find all chunks within the radius
+	FBox ConversionBounds(Center - FVector(Radius), Center + FVector(Radius));
+	TArray<FFluidChunkCoord> AffectedChunks = ChunkManager->GetChunksInBounds(ConversionBounds);
+	
+	int32 ConvertedChunks = 0;
+	int32 TotalConvertedCells = 0;
+	const float RadiusSquared = Radius * Radius;
+	const float SettledThreshold = 0.01f; // Fluid change threshold for "settled"
+	
+	UE_LOG(LogTemp, Log, TEXT("Converting settled fluid to static in radius %.1f around %s"), 
+		Radius, *Center.ToString());
+	
+	for (const FFluidChunkCoord& ChunkCoord : AffectedChunks)
+	{
+		UFluidChunk* Chunk = ChunkManager->GetChunk(ChunkCoord);
+		if (!Chunk)
+			continue;
+		
+		// Check if this chunk intersects any static water regions
+		FBox ChunkBounds = Chunk->GetWorldBounds();
+		if (!StaticWaterManager->ChunkIntersectsStaticWater(ChunkBounds))
+			continue;
+		
+		int32 ConvertedInChunk = 0;
+		
+		for (int32 LocalZ = 0; LocalZ < Chunk->ChunkSize; LocalZ++)
+		{
+			for (int32 LocalY = 0; LocalY < Chunk->ChunkSize; LocalY++)
+			{
+				for (int32 LocalX = 0; LocalX < Chunk->ChunkSize; LocalX++)
+				{
+					FVector CellWorldPos = Chunk->GetWorldPositionFromLocal(LocalX, LocalY, LocalZ);
+					float DistanceSquared = FVector::DistSquared(CellWorldPos, Center);
+					
+					// Only process cells within the radius
+					if (DistanceSquared > RadiusSquared)
+						continue;
+					
+					int32 LinearIndex = Chunk->GetLocalCellIndex(LocalX, LocalY, LocalZ);
+					if (!Chunk->Cells.IsValidIndex(LinearIndex))
+						continue;
+					
+					FCAFluidCell& Cell = Chunk->Cells[LinearIndex];
+					
+					// Check if this is a dynamic fluid cell that should be static
+					if (!Cell.bSourceBlock && Cell.FluidLevel > 0.5f)
+					{
+						// Check if this position should have static water
+						float ExpectedWaterLevel = 0.0f;
+						if (StaticWaterManager->ShouldHaveStaticWaterAt(CellWorldPos, ExpectedWaterLevel))
+						{
+							// Check if fluid has settled (small change from last frame)
+							float FluidChange = FMath::Abs(Cell.FluidLevel - Cell.LastFluidLevel);
+							bool bIsSettled = FluidChange < SettledThreshold || Cell.bSettled;
+							
+							if (bIsSettled && Cell.FluidLevel > 0.8f)
+							{
+								// Convert to static water
+								Cell.bSourceBlock = true;
+								Cell.bSettled = true;
+								Cell.FluidLevel = 1.0f;
+								Cell.LastFluidLevel = 1.0f;
+								ConvertedInChunk++;
+							}
+						}
+					}
+				}
+			}
+		}
+		
+		if (ConvertedInChunk > 0)
+		{
+			TotalConvertedCells += ConvertedInChunk;
+			ConvertedChunks++;
+			UE_LOG(LogTemp, Verbose, TEXT("Converted %d cells to static in chunk %s"), 
+				ConvertedInChunk, *ChunkCoord.ToString());
+		}
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Dynamic-to-static conversion complete: %d chunks processed, %d cells converted"), 
+		ConvertedChunks, TotalConvertedCells);
+}
+
+void AVoxelFluidActor::TestTerrainRefreshAtLocation(const FVector& Location, float Radius)
+{
+	UE_LOG(LogTemp, Warning, TEXT("=== TESTING TERRAIN REFRESH ==="));
+	UE_LOG(LogTemp, Warning, TEXT("Location: %s, Radius: %.1f"), *Location.ToString(), Radius);
+
+	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ChunkManager is null!"));
+		return;
+	}
+
+	// Find chunks in the area
+	FBox TestBounds(Location - FVector(Radius), Location + FVector(Radius));
+	TArray<FFluidChunkCoord> AffectedChunks = ChunkManager->GetChunksInBounds(TestBounds);
+	
+	UE_LOG(LogTemp, Warning, TEXT("Found %d chunks in bounds"), AffectedChunks.Num());
+	
+	// Log info about each chunk before refresh
+	for (const FFluidChunkCoord& ChunkCoord : AffectedChunks)
+	{
+		UFluidChunk* Chunk = ChunkManager->GetChunk(ChunkCoord);
+		if (Chunk)
+		{
+			int32 FluidCellCount = 0;
+			for (int32 i = 0; i < Chunk->Cells.Num(); i++)
+			{
+				if (Chunk->Cells[i].FluidLevel > 0.1f)
+					FluidCellCount++;
+			}
+			
+			UE_LOG(LogTemp, Warning, TEXT("Chunk %s: State=%d, CellsNum=%d"), 
+				*ChunkCoord.ToString(), (int32)Chunk->State, Chunk->Cells.Num());
+			UE_LOG(LogTemp, Warning, TEXT("Chunk %s has %d fluid cells before refresh"), 
+				*ChunkCoord.ToString(), FluidCellCount);
+		}
+	}
+
+	// Test the terrain refresh
+	UE_LOG(LogTemp, Warning, TEXT("Calling RefreshTerrainInRadius..."));
+	if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
+	{
+		VoxelIntegration->RefreshTerrainInRadius(Location, Radius);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("VoxelIntegration is null or voxel world is invalid"));
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("=== TERRAIN REFRESH TEST COMPLETE ==="));
+	
+	// Now test the static water refill
+	RefillStaticWaterInRadius(Location, Radius);
+}

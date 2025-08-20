@@ -304,6 +304,12 @@ public:
 	
 	UFUNCTION(BlueprintCallable, Category = "Static Water", meta = (CallInEditor = "true"))
 	void RetryStaticWaterApplication();
+	
+	UFUNCTION(BlueprintCallable, Category = "Static Water")
+	void RefillStaticWaterInRadius(const FVector& Center, float Radius);
+	
+	UFUNCTION(BlueprintCallable, Category = "Static Water Debug", meta = (CallInEditor = "true"))
+	void TestTerrainRefreshAtLocation(const FVector& Location, float Radius = 200.0f);
 
 private:
 	TMap<FVector, float> FluidSources;
@@ -325,4 +331,11 @@ private:
 	
 	// Simulation timing
 	float SimulationAccumulator = 0.0f;
+	
+	// Static water dynamic refill system
+	void StartDynamicToStaticConversion(const FVector& Center, float Radius);
+	void ConvertSettledFluidToStatic(const FVector& Center, float Radius);
+	
+	UPROPERTY(EditAnywhere, Category = "Static Water")
+	float DynamicToStaticSettleTime = 5.0f;
 };
