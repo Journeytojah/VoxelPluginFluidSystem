@@ -282,6 +282,9 @@ public:
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bPauseFluidSources = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
+	bool bEnableDebugLogging = false;
 
 	// Static Water Body Functions
 	UFUNCTION(BlueprintCallable, Category = "Static Water", meta = (CallInEditor = "true"))

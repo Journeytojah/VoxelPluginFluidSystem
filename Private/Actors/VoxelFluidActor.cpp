@@ -4,6 +4,7 @@
 #include "CellularAutomata/StaticWaterBody.h"
 #include "VoxelIntegration/VoxelFluidIntegration.h"
 #include "VoxelFluidStats.h"
+#include "VoxelFluidDebug.h"
 #include "Visualization/FluidVisualizationComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/BillboardComponent.h"
@@ -13,6 +14,15 @@
 #include "UObject/ConstructorHelpers.h"
 #include "VoxelFluidStats.h"
 #include "GameFramework/PlayerController.h"
+
+// Temporary definitions until build system picks up VoxelFluidDebug.cpp
+DEFINE_LOG_CATEGORY(LogVoxelFluidDebug);
+TAutoConsoleVariable<bool> CVarEnableVoxelFluidDebugLogging(
+	TEXT("voxelfluid.EnableDebugLogging"),
+	false,
+	TEXT("Enable debug logging for VoxelFluid system components"),
+	ECVF_Default
+);
 
 AVoxelFluidActor::AVoxelFluidActor()
 {
@@ -1606,12 +1616,12 @@ void AVoxelFluidActor::ConvertSettledFluidToStatic(const FVector& Center, float 
 
 void AVoxelFluidActor::TestTerrainRefreshAtLocation(const FVector& Location, float Radius)
 {
-	UE_LOG(LogTemp, Warning, TEXT("=== TESTING TERRAIN REFRESH ==="));
-	UE_LOG(LogTemp, Warning, TEXT("Location: %s, Radius: %.1f"), *Location.ToString(), Radius);
+	UE_LOG_VOXELFLUID_DEBUG(this, Warning, TEXT("=== TESTING TERRAIN REFRESH ==="));
+	UE_LOG_VOXELFLUID_DEBUG(this, Warning, TEXT("Location: %s, Radius: %.1f"), *Location.ToString(), Radius);
 
 	if (!ChunkManager)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("ChunkManager is null!"));
+		UE_LOG_VOXELFLUID_DEBUG(this, Warning, TEXT("ChunkManager is null!"));
 		return;
 	}
 
@@ -1619,7 +1629,7 @@ void AVoxelFluidActor::TestTerrainRefreshAtLocation(const FVector& Location, flo
 	FBox TestBounds(Location - FVector(Radius), Location + FVector(Radius));
 	TArray<FFluidChunkCoord> AffectedChunks = ChunkManager->GetChunksInBounds(TestBounds);
 	
-	UE_LOG(LogTemp, Warning, TEXT("Found %d chunks in bounds"), AffectedChunks.Num());
+	UE_LOG_VOXELFLUID_DEBUG(this, Warning, TEXT("Found %d chunks in bounds"), AffectedChunks.Num());
 	
 	// Log info about each chunk before refresh
 	for (const FFluidChunkCoord& ChunkCoord : AffectedChunks)
@@ -1634,25 +1644,25 @@ void AVoxelFluidActor::TestTerrainRefreshAtLocation(const FVector& Location, flo
 					FluidCellCount++;
 			}
 			
-			UE_LOG(LogTemp, Warning, TEXT("Chunk %s: State=%d, CellsNum=%d"), 
+			UE_LOG_VOXELFLUID_DEBUG(this, Warning, TEXT("Chunk %s: State=%d, CellsNum=%d"), 
 				*ChunkCoord.ToString(), (int32)Chunk->State, Chunk->Cells.Num());
-			UE_LOG(LogTemp, Warning, TEXT("Chunk %s has %d fluid cells before refresh"), 
+			UE_LOG_VOXELFLUID_DEBUG(this, Warning, TEXT("Chunk %s has %d fluid cells before refresh"), 
 				*ChunkCoord.ToString(), FluidCellCount);
 		}
 	}
 
 	// Test the terrain refresh
-	UE_LOG(LogTemp, Warning, TEXT("Calling RefreshTerrainInRadius..."));
+	UE_LOG_VOXELFLUID_DEBUG(this, Warning, TEXT("Calling RefreshTerrainInRadius..."));
 	if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
 	{
 		VoxelIntegration->RefreshTerrainInRadius(Location, Radius);
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("VoxelIntegration is null or voxel world is invalid"));
+		UE_LOG_VOXELFLUID_DEBUG(this, Warning, TEXT("VoxelIntegration is null or voxel world is invalid"));
 	}
 	
-	UE_LOG(LogTemp, Warning, TEXT("=== TERRAIN REFRESH TEST COMPLETE ==="));
+	UE_LOG_VOXELFLUID_DEBUG(this, Warning, TEXT("=== TERRAIN REFRESH TEST COMPLETE ==="));
 	
 	// Now test the static water refill
 	RefillStaticWaterInRadius(Location, Radius);

@@ -1,6 +1,7 @@
 #include "CellularAutomata/FluidChunkManager.h"
 #include "CellularAutomata/StaticWaterBody.h"
 #include "VoxelFluidStats.h"
+#include "VoxelFluidDebug.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "Async/ParallelFor.h"
@@ -80,17 +81,24 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 		UpdateChunkStates(ViewerPositions);
 		UpdateChunkLODs(ViewerPositions);
 		
+		// Track queues for performance monitoring
 		int32 LoadQueueBefore = ChunkLoadQueue.IsEmpty() ? 0 : 1;
 		int32 UnloadQueueBefore = ChunkUnloadQueue.IsEmpty() ? 0 : 1;
 		
-		ProcessChunkLoadQueue();
-		ProcessChunkUnloadQueue();
+		// Process queues with improved performance
+		{
+			SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ChunkStateChange);
+			ProcessChunkLoadQueue();
+			ProcessChunkUnloadQueue();
+		}
 		
 		if (LoadQueueBefore > 0 || UnloadQueueBefore > 0)
 		{
 			UE_LOG(LogTemp, Log, TEXT("Chunk Streaming: Processed %d loads, %d unloads. Cache has %d entries (%d KB)"),
 			       LoadQueueBefore, UnloadQueueBefore, GetCacheSize(), GetCacheMemoryUsage());
 		}
+		
+		SET_DWORD_STAT(STAT_VoxelFluid_StateChangesPerFrame, LoadQueueBefore + UnloadQueueBefore);
 	}
 	
 	StatsUpdateTimer += DeltaTime;
@@ -686,7 +694,7 @@ void UFluidChunkManager::ProcessChunkLoadQueue()
 
 void UFluidChunkManager::ProcessChunkUnloadQueue()
 {
-	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ChunkStreaming);
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ChunkUnload);
 	
 	int32 ProcessedCount = 0;
 	FFluidChunkCoord Coord;

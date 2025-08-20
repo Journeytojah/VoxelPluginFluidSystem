@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "Components/SceneComponent.h"
 #include "VoxelFluidStats.h"
+#include "VoxelFluidDebug.h"
 #include "VoxelLayersBlueprintLibrary.h"
 
 UVoxelFluidIntegration::UVoxelFluidIntegration()
@@ -753,8 +754,8 @@ void UVoxelFluidIntegration::RefreshTerrainInRadius(const FVector& Center, float
 	if (!bUse3DVoxelTerrain)
 		return;
 	
-	UE_LOG(LogTemp, Warning, TEXT("=== RefreshTerrainInRadius START ==="));
-	UE_LOG(LogTemp, Warning, TEXT("Center: %s, Radius: %.1f"), *Center.ToString(), Radius);
+	UE_LOG_VOXELFLUID_COMPONENT_DEBUG(Warning, TEXT("=== RefreshTerrainInRadius START ==="));
+	UE_LOG_VOXELFLUID_COMPONENT_DEBUG(Warning, TEXT("Center: %s, Radius: %.1f"), *Center.ToString(), Radius);
 	
 	if (bUseChunkedSystem && ChunkManager)
 	{
@@ -804,7 +805,7 @@ void UVoxelFluidIntegration::RefreshTerrainInRadius(const FVector& Center, float
 		}
 	}
 	
-	UE_LOG(LogTemp, Warning, TEXT("=== RefreshTerrainInRadius END ==="));
+	UE_LOG_VOXELFLUID_COMPONENT_DEBUG(Warning, TEXT("=== RefreshTerrainInRadius END ==="));
 }
 
 int32 UVoxelFluidIntegration::UpdateGridCellsInRadius(const FVector& Center, float Radius)
