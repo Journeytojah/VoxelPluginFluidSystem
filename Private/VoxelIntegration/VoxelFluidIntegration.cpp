@@ -748,6 +748,8 @@ void UVoxelFluidIntegration::RefreshTerrainAfterSculpting()
 
 void UVoxelFluidIntegration::RefreshTerrainInRadius(const FVector& Center, float Radius)
 {
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_TerrainRefresh);
+	
 	if (!bUse3DVoxelTerrain)
 		return;
 	
@@ -1118,6 +1120,9 @@ bool UVoxelFluidIntegration::QueryVoxelAtPosition(const FVector& WorldPosition, 
 
 bool UVoxelFluidIntegration::CheckIfCellIsSolid(const FVector& CellCenter, int32 GridX, int32 GridY, int32 GridZ)
 {
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_TerrainSampling);
+	INC_DWORD_STAT(STAT_VoxelFluid_TerrainQueries);
+	
 	if (!IsVoxelWorldValid())
 	{
 		return false;

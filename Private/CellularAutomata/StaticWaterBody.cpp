@@ -1,5 +1,6 @@
 #include "CellularAutomata/StaticWaterBody.h"
 #include "CellularAutomata/FluidChunk.h"
+#include "VoxelFluidStats.h"
 
 UStaticWaterManager::UStaticWaterManager()
 {
@@ -225,6 +226,8 @@ void UStaticWaterManager::ApplyStaticWaterToChunk(UFluidChunk* Chunk) const
 
 void UStaticWaterManager::ApplyStaticWaterToChunkWithTerrain(UFluidChunk* Chunk) const
 {
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_StaticWaterApply);
+	
 	if (!Chunk)
 		return;
 

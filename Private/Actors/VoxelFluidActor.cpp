@@ -3,6 +3,7 @@
 #include "CellularAutomata/FluidChunk.h"
 #include "CellularAutomata/StaticWaterBody.h"
 #include "VoxelIntegration/VoxelFluidIntegration.h"
+#include "VoxelFluidStats.h"
 #include "Visualization/FluidVisualizationComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/BillboardComponent.h"
@@ -406,16 +407,24 @@ void AVoxelFluidActor::TestFluidSpawn()
 
 void AVoxelFluidActor::UpdateFluidSources(float DeltaTime)
 {
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_FluidSourceUpdate);
+	
 	if (ChunkManager)
 	{
+		SET_DWORD_STAT(STAT_VoxelFluid_ActiveSources, FluidSources.Num());
+		
+		float TotalFlowRate = 0.0f;
 		for (const auto& Source : FluidSources)
 		{
 			const FVector& SourcePos = Source.Key;
 			const float SourceFlowRate = Source.Value;
+			TotalFlowRate += SourceFlowRate;
 			
 			// Use the source's specific flow rate, not the global one
 			ChunkManager->AddFluidAtWorldPosition(SourcePos, SourceFlowRate * DeltaTime);
 		}
+		
+		SET_FLOAT_STAT(STAT_VoxelFluid_TotalSourceFlow, TotalFlowRate);
 	}
 }
 
@@ -1412,6 +1421,8 @@ void AVoxelFluidActor::RetryStaticWaterApplication()
 
 void AVoxelFluidActor::RefillStaticWaterInRadius(const FVector& Center, float Radius)
 {
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_DynamicRefill);
+	
 	if (!StaticWaterManager || !ChunkManager || !bEnableStaticWater)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Cannot refill static water - system not ready"));

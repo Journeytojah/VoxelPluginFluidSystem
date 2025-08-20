@@ -204,6 +204,35 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 	
 	TArray<UFluidChunk*> ActiveChunkArray = GetActiveChunks();
 	
+	// Update critical performance stats
+	SET_DWORD_STAT(STAT_VoxelFluid_ActiveChunks, ActiveChunkArray.Num());
+	SET_DWORD_STAT(STAT_VoxelFluid_LoadedChunks, LoadedChunks.Num());
+	
+	int32 TotalCells = 0, ActiveCells = 0, StaticWaterCells = 0;
+	float TotalVolume = 0.0f;
+	for (UFluidChunk* Chunk : ActiveChunkArray)
+	{
+		if (Chunk)
+		{
+			TotalCells += Chunk->Cells.Num();
+			for (const auto& Cell : Chunk->Cells)
+			{
+				if (Cell.FluidLevel > 0.01f)
+				{
+					ActiveCells++;
+					TotalVolume += Cell.FluidLevel;
+					if (Cell.bSourceBlock)
+						StaticWaterCells++;
+				}
+			}
+		}
+	}
+	
+	SET_DWORD_STAT(STAT_VoxelFluid_TotalCells, TotalCells);
+	SET_DWORD_STAT(STAT_VoxelFluid_ActiveCells, ActiveCells);
+	SET_DWORD_STAT(STAT_VoxelFluid_StaticWaterCells, StaticWaterCells);
+	SET_FLOAT_STAT(STAT_VoxelFluid_TotalVolume, TotalVolume);
+	
 	// Use optimized parallel processing
 	if (bUseOptimizedParallelProcessing && ActiveChunkArray.Num() > 2)
 	{

@@ -91,3 +91,46 @@ DECLARE_DWORD_COUNTER_STAT(TEXT("Mesh Mem MB"), STAT_VoxelFluid_MeshMemoryMB, ST
 // Sparse Grid Stats
 DECLARE_CYCLE_STAT(TEXT("Convert To Sparse"), STAT_VoxelFluid_ConvertToSparse, STATGROUP_VoxelFluid);
 DECLARE_CYCLE_STAT(TEXT("Convert To Dense"), STAT_VoxelFluid_ConvertToDense, STATGROUP_VoxelFluid);
+
+// =====================================================
+//  PERFORMANCE CRITICAL PATH METRICS
+// =====================================================
+
+// Hot Path Timing - Most Important for Frame Rate
+DECLARE_CYCLE_STAT(TEXT("[CRITICAL] Terrain Sampling"), STAT_VoxelFluid_TerrainSampling, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[CRITICAL] Cell Updates"), STAT_VoxelFluid_CellUpdates, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[CRITICAL] Physics Solver"), STAT_VoxelFluid_PhysicsSolver, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[CRITICAL] Mesh Building"), STAT_VoxelFluid_MeshBuilding, STATGROUP_VoxelFluid);
+
+// Static Water System Performance
+DECLARE_CYCLE_STAT(TEXT("Static Water Apply"), STAT_VoxelFluid_StaticWaterApply, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("Dynamic Refill"), STAT_VoxelFluid_DynamicRefill, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Static Regions"), STAT_VoxelFluid_StaticWaterRegions, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Static Cells"), STAT_VoxelFluid_StaticWaterCells, STATGROUP_VoxelFluid);
+
+// Detailed Simulation Breakdown
+DECLARE_CYCLE_STAT(TEXT("Fluid Source Update"), STAT_VoxelFluid_FluidSourceUpdate, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("Settling Detection"), STAT_VoxelFluid_SettlingDetection, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("Cross-Chunk Flow"), STAT_VoxelFluid_CrossChunkFlowTime, STATGROUP_VoxelFluid);
+
+// Memory Allocation Tracking
+DECLARE_CYCLE_STAT(TEXT("Memory Alloc"), STAT_VoxelFluid_MemoryAllocation, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Allocs/Frame"), STAT_VoxelFluid_AllocsPerFrame, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Peak Cells"), STAT_VoxelFluid_PeakActiveCells, STATGROUP_VoxelFluid);
+
+// Terrain Integration Cost
+DECLARE_CYCLE_STAT(TEXT("Terrain Refresh"), STAT_VoxelFluid_TerrainRefresh, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("Voxel World Sync"), STAT_VoxelFluid_VoxelWorldSync, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Terrain Queries"), STAT_VoxelFluid_TerrainQueries, STATGROUP_VoxelFluid);
+
+// Chunk System Deep Metrics
+DECLARE_CYCLE_STAT(TEXT("Chunk Load"), STAT_VoxelFluid_ChunkLoad, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("Chunk Unload"), STAT_VoxelFluid_ChunkUnload, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("Chunk State Change"), STAT_VoxelFluid_ChunkStateChange, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("State Changes/Frame"), STAT_VoxelFluid_StateChangesPerFrame, STATGROUP_VoxelFluid);
+
+// Frame Timing Breakdown (Top Bottlenecks)
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[TOP] Simulation %"), STAT_VoxelFluid_SimulationPercent, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[TOP] Rendering %"), STAT_VoxelFluid_RenderingPercent, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[TOP] Terrain %"), STAT_VoxelFluid_TerrainPercent, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[TOP] Memory %"), STAT_VoxelFluid_MemoryPercent, STATGROUP_VoxelFluid);
