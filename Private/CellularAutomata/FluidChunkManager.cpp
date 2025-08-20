@@ -1,4 +1,5 @@
 #include "CellularAutomata/FluidChunkManager.h"
+#include "CellularAutomata/StaticWaterBody.h"
 #include "VoxelFluidStats.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
@@ -221,6 +222,15 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 		// Synchronize borders - can also be done in parallel for non-conflicting chunks
 		// For now, using serial synchronization to avoid race conditions
 		SynchronizeChunkBorders();
+		
+		// Finalize simulation step by swapping buffers
+		for (UFluidChunk* Chunk : ActiveChunkArray)
+		{
+			if (Chunk)
+			{
+				Chunk->FinalizeSimulationStep();
+			}
+		}
 	}
 	else
 	{
@@ -282,28 +292,13 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 		
 		// Synchronize borders
 		SynchronizeChunkBorders();
-	}
-	
-	// Apply the NextCells to Cells for all chunks after border sync
-	if (bUseOptimizedParallelProcessing && ActiveChunkArray.Num() > 8)
-	{
-		// Parallel cell swap
-		ParallelFor(ActiveChunkArray.Num(), [&](int32 Index)
-		{
-			if (ActiveChunkArray[Index])
-			{
-				ActiveChunkArray[Index]->Cells = ActiveChunkArray[Index]->NextCells;
-			}
-		});
-	}
-	else
-	{
-		// Serial cell swap
+		
+		// Finalize simulation step by swapping buffers for all chunks
 		for (UFluidChunk* Chunk : ActiveChunkArray)
 		{
 			if (Chunk)
 			{
-				Chunk->Cells = Chunk->NextCells;
+				Chunk->FinalizeSimulationStep();
 			}
 		}
 	}
@@ -335,6 +330,12 @@ UFluidChunk* UFluidChunkManager::GetOrCreateChunk(const FFluidChunkCoord& Coord)
 	Chunk->Viscosity = Viscosity;
 	Chunk->Gravity = Gravity;
 	Chunk->EvaporationRate = EvaporationRate;
+	
+	// Enable sparse representation if configured
+	if (bUseSparseGrid)
+	{
+		Chunk->bUseSparseRepresentation = false; // Start dense, will auto-convert when appropriate
+	}
 	
 	LoadedChunks.Add(Coord, Chunk);
 	InactiveChunkCoords.Add(Coord);
@@ -1237,6 +1238,17 @@ void UFluidChunkManager::LoadChunk(const FFluidChunkCoord& Coord)
 			else
 			{
 				UE_LOG(LogTemp, Log, TEXT("PERSISTENCE: No cached data for chunk %s, starting fresh"), *Coord.ToString());
+			}
+		}
+		
+		// Apply static water if manager is available
+		if (StaticWaterManager)
+		{
+			FBox ChunkBounds = Chunk->GetWorldBounds();
+			if (StaticWaterManager->ChunkIntersectsStaticWater(ChunkBounds))
+			{
+				StaticWaterManager->ApplyStaticWaterToChunk(Chunk);
+				UE_LOG(LogTemp, Verbose, TEXT("Applied static water to chunk %s on load"), *Coord.ToString());
 			}
 		}
 		

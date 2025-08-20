@@ -99,6 +99,8 @@ public:
 
 	void Initialize(int32 InChunkSize, float InCellSize, const FVector& InWorldOrigin, const FVector& InWorldSize);
 	
+	void SetStaticWaterManager(class UStaticWaterManager* InStaticWaterManager) { StaticWaterManager = InStaticWaterManager; }
+	
 	void UpdateChunks(float DeltaTime, const TArray<FVector>& ViewerPositions);
 	
 	void UpdateSimulation(float DeltaTime);
@@ -198,6 +200,12 @@ public:
 	bool bUseSleepChains = true;
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
+	bool bUseSparseGrid = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization", meta = (ClampMin = "0.1", ClampMax = "0.5"))
+	float SparseGridThreshold = 0.3f;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
 	bool bUsePredictiveSettling = true;
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
@@ -256,6 +264,9 @@ protected:
 	// Fluid freeze state for chunk operations
 	bool bFreezeFluidForChunkOps = false;
 	float ChunkOpsFreezeTimer = 0.0f;
+	
+	// Static water manager reference
+	class UStaticWaterManager* StaticWaterManager = nullptr;
 	
 	// Statistics tracking
 	int32 ChunksSavedThisFrame = 0;

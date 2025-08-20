@@ -888,6 +888,7 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 	
 	// Step 2: Process chunks that need mesh updates (limited per frame)
 	int32 ChunksUpdatedThisFrame = 0;
+	TArray<UFluidChunk*> ChunksToRemoveFromUpdate;
 	
 	// First process chunks that explicitly need updates
 	for (UFluidChunk* Chunk : ChunksNeedingMeshUpdate)
@@ -1069,8 +1070,14 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 		ChunkLastMeshUpdateTime.Add(Chunk, CurrentTime);
 		ChunksUpdatedThisFrame++;
 		
-		// Remove from pending updates
-		ChunksNeedingMeshUpdate.Remove(Chunk);
+		// Mark for removal from pending updates (to avoid modifying container during iteration)
+		ChunksToRemoveFromUpdate.Add(Chunk);
+	}
+	
+	// Remove chunks that were processed from the pending updates set
+	for (UFluidChunk* ProcessedChunk : ChunksToRemoveFromUpdate)
+	{
+		ChunksNeedingMeshUpdate.Remove(ProcessedChunk);
 	}
 	
 	// Step 3: Also check for chunks that have never been rendered (new chunks)

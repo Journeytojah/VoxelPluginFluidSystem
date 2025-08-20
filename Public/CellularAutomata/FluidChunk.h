@@ -222,6 +222,73 @@ struct VOXELFLUIDSYSTEM_API FChunkPersistentData
 	int32 GetMemorySize() const;
 };
 
+// Sparse cell block for efficient memory usage
+USTRUCT()
+struct FSparseFluidBlock
+{
+	GENERATED_BODY()
+	
+	static constexpr int32 BLOCK_SIZE = 4; // 4x4x4 blocks = 64 cells per block
+	
+	UPROPERTY()
+	uint64 OccupancyMask = 0; // Bit per cell (64 bits for 64 cells)
+	
+	UPROPERTY()
+	TArray<FCAFluidCell> Cells; // Only occupied cells
+	
+	int32 GetCellIndex(int32 LocalX, int32 LocalY, int32 LocalZ) const
+	{
+		int32 BitIndex = LocalX + LocalY * BLOCK_SIZE + LocalZ * BLOCK_SIZE * BLOCK_SIZE;
+		if (BitIndex >= 64) return -1;
+		
+		if (OccupancyMask & (1ULL << BitIndex))
+		{
+			// Count bits before this index to get array position
+			uint64 MaskBeforeBit = (1ULL << BitIndex) - 1;
+			return FMath::CountBits(OccupancyMask & MaskBeforeBit);
+		}
+		return -1;
+	}
+	
+	bool SetCell(int32 LocalX, int32 LocalY, int32 LocalZ, const FCAFluidCell& Cell)
+	{
+		int32 BitIndex = LocalX + LocalY * BLOCK_SIZE + LocalZ * BLOCK_SIZE * BLOCK_SIZE;
+		if (BitIndex >= 64) return false;
+		
+		int32 CellIndex = GetCellIndex(LocalX, LocalY, LocalZ);
+		if (CellIndex >= 0)
+		{
+			// Update existing cell
+			Cells[CellIndex] = Cell;
+		}
+		else if (Cell.FluidLevel > 0.001f || Cell.bIsSolid)
+		{
+			// Add new cell
+			OccupancyMask |= (1ULL << BitIndex);
+			uint64 MaskBeforeBit = (1ULL << BitIndex) - 1;
+			int32 InsertIndex = FMath::CountBits(OccupancyMask & MaskBeforeBit);
+			Cells.Insert(Cell, InsertIndex);
+		}
+		return true;
+	}
+	
+	void RemoveCell(int32 LocalX, int32 LocalY, int32 LocalZ)
+	{
+		int32 BitIndex = LocalX + LocalY * BLOCK_SIZE + LocalZ * BLOCK_SIZE * BLOCK_SIZE;
+		if (BitIndex >= 64) return;
+		
+		int32 CellIndex = GetCellIndex(LocalX, LocalY, LocalZ);
+		if (CellIndex >= 0)
+		{
+			OccupancyMask &= ~(1ULL << BitIndex);
+			Cells.RemoveAt(CellIndex);
+		}
+	}
+	
+	int32 GetOccupiedCellCount() const { return Cells.Num(); }
+	bool IsEmpty() const { return OccupancyMask == 0; }
+};
+
 UCLASS(BlueprintType)
 class VOXELFLUIDSYSTEM_API UFluidChunk : public UObject
 {
@@ -233,6 +300,7 @@ public:
 	void Initialize(const FFluidChunkCoord& InCoord, int32 InChunkSize, float InCellSize, const FVector& InWorldOrigin);
 	
 	void UpdateSimulation(float DeltaTime);
+	void FinalizeSimulationStep();  // Swap buffers after border sync
 	
 	void ActivateChunk();
 	void DeactivateChunk();
@@ -284,6 +352,23 @@ public:
 	bool ShouldRegenerateMesh() const;
 	int32 GetSettledCellCount() const;
 	uint32 CalculateFluidStateHash() const;
+	
+	// Sparse grid methods
+	void ConvertToSparse();
+	void ConvertToDense();
+	bool ShouldUseSparse() const;
+	void UpdateSparseRepresentation();
+	float CalculateOccupancy() const;
+	
+	// Sparse grid accessors
+	bool GetSparseCell(int32 X, int32 Y, int32 Z, FCAFluidCell& OutCell) const;
+	void SetSparseCell(int32 X, int32 Y, int32 Z, const FCAFluidCell& Cell);
+	bool GetSparseNeighbor(int32 DX, int32 DY, int32 DZ, int32 FromX, int32 FromY, int32 FromZ, FCAFluidCell& OutCell) const;
+	
+	// Performance metrics
+	int32 GetSparseMemoryUsage() const;
+	int32 GetDenseMemoryUsage() const;
+	float GetCompressionRatio() const;
 
 public:
 	UPROPERTY(BlueprintReadOnly)
@@ -304,8 +389,24 @@ public:
 	UPROPERTY(BlueprintReadOnly)
 	FVector ChunkWorldPosition;
 	
+	// Dense grid storage (original)
 	TArray<FCAFluidCell> Cells;
 	TArray<FCAFluidCell> NextCells;
+	
+	// Sparse grid storage (optimized)
+	UPROPERTY()
+	bool bUseSparseRepresentation = false;
+	
+	TMap<int32, FCAFluidCell> SparseCells;      // Linear index -> Cell
+	TMap<int32, FCAFluidCell> SparseNextCells;  // For double buffering
+	TSet<int32> ActiveCellIndices;              // Quick lookup for active cells
+	
+	// Sparse block storage for even better memory efficiency
+	TArray<FSparseFluidBlock> SparseBlocks;     // Divided into 4x4x4 blocks
+	int32 BlocksPerAxis = 8;                    // For 32-sized chunk: 32/4 = 8
+	
+	UPROPERTY(BlueprintReadOnly)
+	float SparseGridOccupancy = 1.0f;           // Percentage of cells with fluid
 	
 	UPROPERTY(BlueprintReadOnly)
 	float LastUpdateTime = 0.0f;

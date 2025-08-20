@@ -87,3 +87,7 @@ DECLARE_FLOAT_COUNTER_STAT(TEXT("Evaporation"), STAT_VoxelFluid_EvaporationRate,
 
 // Memory Details
 DECLARE_DWORD_COUNTER_STAT(TEXT("Mesh Mem MB"), STAT_VoxelFluid_MeshMemoryMB, STATGROUP_VoxelFluid);
+
+// Sparse Grid Stats
+DECLARE_CYCLE_STAT(TEXT("Convert To Sparse"), STAT_VoxelFluid_ConvertToSparse, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("Convert To Dense"), STAT_VoxelFluid_ConvertToDense, STATGROUP_VoxelFluid);

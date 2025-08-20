@@ -75,6 +75,8 @@ UFluidChunk::UFluidChunk()
 	MinFluidLevel = 0.001f;
 	MaxFluidLevel = 1.0f;
 	CompressionFactor = 0.05f;
+	bUseSparseRepresentation = false;
+	SparseGridOccupancy = 1.0f;
 }
 
 void UFluidChunk::Initialize(const FFluidChunkCoord& InCoord, int32 InChunkSize, float InCellSize, const FVector& InWorldOrigin)
@@ -114,30 +116,42 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_UpdateSimulation);
 	
-	// Early exit if chunk is fully settled and has no activity
-	// Disabled aggressive settling to maintain fluid responsiveness
-	// if (bFullySettled && InactiveFrameCount > 300) // Skip after 5 seconds of inactivity
-	// {
-	// 	InactiveFrameCount++;
-	// 	return;
-	// }
+	// Check if we should switch between sparse and dense representation
+	UpdateSparseRepresentation();
 	
-	// Disabled frequency skipping to maintain fluid responsiveness
-	// static int32 FrameCounter = 0;
-	// FrameCounter++;
-	// if (UpdateFrequency > 1 && (FrameCounter % UpdateFrequency) != 0)
-	// {
-	// 	return;
-	// }
+	// Early exit for empty chunks
+	if (bUseSparseRepresentation)
+	{
+		if (SparseCells.Num() == 0)
+			return;
+	}
+	else
+	{
+		if (Cells.Num() == 0)
+			return;
+	}
 	
 	// Track total fluid change for mesh update decision
 	float TotalFluidChange = 0.0f;
-	for (int32 i = 0; i < Cells.Num(); ++i)
-	{
-		Cells[i].LastFluidLevel = Cells[i].FluidLevel;
-	}
 	
-	NextCells = Cells;
+	if (bUseSparseRepresentation)
+	{
+		// Sparse path: only update cells with fluid
+		for (auto& Pair : SparseCells)
+		{
+			Pair.Value.LastFluidLevel = Pair.Value.FluidLevel;
+		}
+		SparseNextCells = SparseCells;
+	}
+	else
+	{
+		// Dense path: update all cells
+		for (int32 i = 0; i < Cells.Num(); ++i)
+		{
+			Cells[i].LastFluidLevel = Cells[i].FluidLevel;
+		}
+		NextCells = Cells;
+	}
 	
 	// Simplified simulation without settling-related functions
 	if (CurrentLOD == 0)
@@ -174,18 +188,48 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	int32 FluidCellCount = 0;
 	TotalFluidActivity = 0.0f;
 	
-	for (int32 i = 0; i < NextCells.Num(); ++i)
+	if (bUseSparseRepresentation)
 	{
-		const float Change = FMath::Abs(NextCells[i].FluidLevel - NextCells[i].LastFluidLevel);
-		TotalFluidChange += Change;
-		TotalFluidActivity += Change;
-		
-		if (NextCells[i].FluidLevel > MinFluidLevel && !NextCells[i].bIsSolid)
+		// Sparse mode: iterate through sparse cells
+		for (const auto& CellPair : SparseNextCells)
 		{
-			FluidCellCount++;
-			if (NextCells[i].bSettled)
+			const FCAFluidCell& NextCell = CellPair.Value;
+			float LastLevel = 0.0f;
+			if (const FCAFluidCell* LastCell = SparseCells.Find(CellPair.Key))
 			{
-				SettledCount++;
+				LastLevel = LastCell->LastFluidLevel;
+			}
+			
+			const float Change = FMath::Abs(NextCell.FluidLevel - LastLevel);
+			TotalFluidChange += Change;
+			TotalFluidActivity += Change;
+			
+			if (NextCell.FluidLevel > MinFluidLevel && !NextCell.bIsSolid)
+			{
+				FluidCellCount++;
+				if (NextCell.bSettled)
+				{
+					SettledCount++;
+				}
+			}
+		}
+	}
+	else
+	{
+		// Dense mode: original implementation
+		for (int32 i = 0; i < NextCells.Num(); ++i)
+		{
+			const float Change = FMath::Abs(NextCells[i].FluidLevel - NextCells[i].LastFluidLevel);
+			TotalFluidChange += Change;
+			TotalFluidActivity += Change;
+			
+			if (NextCells[i].FluidLevel > MinFluidLevel && !NextCells[i].bIsSolid)
+			{
+				FluidCellCount++;
+				if (NextCells[i].bSettled)
+				{
+					SettledCount++;
+				}
 			}
 		}
 	}
@@ -228,6 +272,30 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	
 	bDirty = true;
 	LastActivityLevel = TotalFluidActivity;
+}
+
+void UFluidChunk::FinalizeSimulationStep()
+{
+	// Swap buffers after border synchronization
+	if (bUseSparseRepresentation)
+	{
+		// Sparse mode: swap sparse buffers
+		SparseCells = SparseNextCells;
+		// Update active cell indices
+		ActiveCellIndices.Empty();
+		for (const auto& CellPair : SparseCells)
+		{
+			if (CellPair.Value.FluidLevel > MinFluidLevel || CellPair.Value.bIsSolid)
+			{
+				ActiveCellIndices.Add(CellPair.Key);
+			}
+		}
+	}
+	else
+	{
+		// Dense mode: swap dense buffers
+		Cells = NextCells;
+	}
 }
 
 void UFluidChunk::ActivateChunk()
@@ -639,6 +707,89 @@ void UFluidChunk::ApplyGravity(float DeltaTime)
 	// Reduce gravity effect for better water accumulation
 	const float GravityFlow = (Gravity / 1000.0f) * DeltaTime * 0.8f;
 	
+	// Check if we're in sparse mode
+	if (bUseSparseRepresentation)
+	{
+		// Sparse mode: only process cells that exist
+		TArray<TPair<int32, float>> GravityTransfers;
+		
+		for (const auto& CellPair : SparseCells)
+		{
+			const int32 CurrentIdx = CellPair.Key;
+			const FCAFluidCell& CurrentCell = CellPair.Value;
+			
+			if (CurrentCell.FluidLevel <= 0.0f)
+				continue;
+			
+			// Calculate coordinates from linear index
+			const int32 x = CurrentIdx % ChunkSize;
+			const int32 y = (CurrentIdx / ChunkSize) % ChunkSize;
+			const int32 z = CurrentIdx / (ChunkSize * ChunkSize);
+			
+			if (z == 0)
+				continue; // Already at bottom
+			
+			const int32 BelowIdx = GetLocalCellIndex(x, y, z - 1);
+			
+			// Get below cell if it exists
+			FCAFluidCell BelowCell;
+			if (const FCAFluidCell* BelowPtr = SparseCells.Find(BelowIdx))
+			{
+				BelowCell = *BelowPtr;
+			}
+			
+			if (!BelowCell.bIsSolid)
+			{
+				const float SpaceBelow = MaxFluidLevel - BelowCell.FluidLevel;
+				float GravityMultiplier = 1.0f;
+				
+				if (BelowCell.FluidLevel > MaxFluidLevel * 0.5f)
+				{
+					GravityMultiplier = 0.3f;
+				}
+				else if (BelowCell.FluidLevel > MaxFluidLevel * 0.2f)
+				{
+					GravityMultiplier = 0.6f;
+				}
+				
+				const float AdjustedGravityFlow = GravityFlow * GravityMultiplier;
+				const float FlowAmount = FMath::Min(CurrentCell.FluidLevel * AdjustedGravityFlow, SpaceBelow);
+				
+				if (FlowAmount > 0)
+				{
+					GravityTransfers.Add(TPair<int32, float>(CurrentIdx, -FlowAmount));
+					GravityTransfers.Add(TPair<int32, float>(BelowIdx, FlowAmount));
+				}
+			}
+		}
+		
+		// Apply gravity transfers to SparseNextCells
+		for (const auto& Transfer : GravityTransfers)
+		{
+			if (FCAFluidCell* Cell = SparseNextCells.Find(Transfer.Key))
+			{
+				Cell->FluidLevel += Transfer.Value;
+				if (Cell->FluidLevel <= MinFluidLevel && Transfer.Value < 0)
+				{
+					// Remove cell if it's now empty
+					SparseNextCells.Remove(Transfer.Key);
+					ActiveCellIndices.Remove(Transfer.Key);
+				}
+			}
+			else if (Transfer.Value > 0)
+			{
+				// Add new cell if receiving fluid
+				FCAFluidCell NewCell;
+				NewCell.FluidLevel = Transfer.Value;
+				SparseNextCells.Add(Transfer.Key, NewCell);
+				ActiveCellIndices.Add(Transfer.Key);
+			}
+		}
+		
+		return; // Exit early for sparse mode
+	}
+	
+	// Dense mode: original implementation
 	for (int32 z = ChunkSize - 1; z >= 1; --z)
 	{
 		for (int32 y = 0; y < ChunkSize; ++y)
@@ -690,6 +841,93 @@ void UFluidChunk::ApplyFlowRules(float DeltaTime)
 	// Reduce flow rate for better pooling and accumulation
 	const float FlowAmount = FlowRate * DeltaTime * 0.7f;
 	
+	// Handle sparse mode
+	if (bUseSparseRepresentation)
+	{
+		TArray<TPair<int32, float>> FlowTransfers;
+		
+		for (const auto& CellPair : SparseCells)
+		{
+			const int32 CurrentIdx = CellPair.Key;
+			const FCAFluidCell& CurrentCell = CellPair.Value;
+			
+			if (CurrentCell.FluidLevel <= 0.0f || CurrentCell.bIsSolid)
+				continue;
+			
+			// Calculate coordinates from linear index
+			const int32 x = CurrentIdx % ChunkSize;
+			const int32 y = (CurrentIdx / ChunkSize) % ChunkSize;
+			const int32 z = CurrentIdx / (ChunkSize * ChunkSize);
+			
+			// Check horizontal neighbors
+			const TArray<FIntVector> Directions = {
+				FIntVector(1, 0, 0), FIntVector(-1, 0, 0),
+				FIntVector(0, 1, 0), FIntVector(0, -1, 0)
+			};
+			
+			for (const FIntVector& Dir : Directions)
+			{
+				const int32 NeighborX = x + Dir.X;
+				const int32 NeighborY = y + Dir.Y;
+				const int32 NeighborZ = z + Dir.Z;
+				
+				if (NeighborX < 0 || NeighborX >= ChunkSize || 
+					NeighborY < 0 || NeighborY >= ChunkSize || 
+					NeighborZ < 0 || NeighborZ >= ChunkSize)
+					continue;
+				
+				const int32 NeighborIdx = GetLocalCellIndex(NeighborX, NeighborY, NeighborZ);
+				
+				FCAFluidCell NeighborCell;
+				if (const FCAFluidCell* NeighborPtr = SparseCells.Find(NeighborIdx))
+				{
+					NeighborCell = *NeighborPtr;
+				}
+				
+				if (!NeighborCell.bIsSolid)
+				{
+					const float FluidDiff = CurrentCell.FluidLevel - NeighborCell.FluidLevel;
+					if (FluidDiff > 0)
+					{
+						const float MaxFlow = FluidDiff * FlowAmount * 0.25f; // Divide by 4 for horizontal flow
+						const float SpaceAvailable = MaxFluidLevel - NeighborCell.FluidLevel;
+						const float ActualFlow = FMath::Min(MaxFlow, SpaceAvailable);
+						
+						if (ActualFlow > 0)
+						{
+							FlowTransfers.Add(TPair<int32, float>(CurrentIdx, -ActualFlow));
+							FlowTransfers.Add(TPair<int32, float>(NeighborIdx, ActualFlow));
+						}
+					}
+				}
+			}
+		}
+		
+		// Apply flow transfers
+		for (const auto& Transfer : FlowTransfers)
+		{
+			if (FCAFluidCell* Cell = SparseNextCells.Find(Transfer.Key))
+			{
+				Cell->FluidLevel += Transfer.Value;
+				if (Cell->FluidLevel <= MinFluidLevel && Transfer.Value < 0)
+				{
+					SparseNextCells.Remove(Transfer.Key);
+					ActiveCellIndices.Remove(Transfer.Key);
+				}
+			}
+			else if (Transfer.Value > 0)
+			{
+				FCAFluidCell NewCell;
+				NewCell.FluidLevel = Transfer.Value;
+				SparseNextCells.Add(Transfer.Key, NewCell);
+				ActiveCellIndices.Add(Transfer.Key);
+			}
+		}
+		
+		return; // Exit early for sparse mode
+	}
+	
+	// Dense mode: original implementation
 	for (int32 z = 0; z < ChunkSize; ++z)
 	{
 		for (int32 y = 0; y < ChunkSize; ++y)
@@ -813,6 +1051,74 @@ void UFluidChunk::ApplyPressure(float DeltaTime)
 {
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ApplyPressure);
 	
+	// Handle sparse mode
+	if (bUseSparseRepresentation)
+	{
+		TArray<TPair<int32, float>> PressureTransfers;
+		
+		for (const auto& CellPair : SparseCells)
+		{
+			const int32 CurrentIdx = CellPair.Key;
+			const FCAFluidCell& CurrentCell = CellPair.Value;
+			
+			if (CurrentCell.FluidLevel <= CompressionFactor)
+				continue;
+			
+			// Calculate coordinates from linear index
+			const int32 x = CurrentIdx % ChunkSize;
+			const int32 y = (CurrentIdx / ChunkSize) % ChunkSize;
+			const int32 z = CurrentIdx / (ChunkSize * ChunkSize);
+			
+			if (z >= ChunkSize - 1)
+				continue; // Can't push up from top layer
+			
+			const int32 AboveIdx = GetLocalCellIndex(x, y, z + 1);
+			
+			FCAFluidCell AboveCell;
+			if (const FCAFluidCell* AbovePtr = SparseCells.Find(AboveIdx))
+			{
+				AboveCell = *AbovePtr;
+			}
+			
+			if (!AboveCell.bIsSolid)
+			{
+				const float Compression = CurrentCell.FluidLevel - CompressionFactor;
+				const float SpaceAbove = MaxFluidLevel - AboveCell.FluidLevel;
+				const float PushUp = FMath::Min(Compression * 0.3f, SpaceAbove);
+				
+				if (PushUp > 0)
+				{
+					PressureTransfers.Add(TPair<int32, float>(CurrentIdx, -PushUp));
+					PressureTransfers.Add(TPair<int32, float>(AboveIdx, PushUp));
+				}
+			}
+		}
+		
+		// Apply pressure transfers
+		for (const auto& Transfer : PressureTransfers)
+		{
+			if (FCAFluidCell* Cell = SparseNextCells.Find(Transfer.Key))
+			{
+				Cell->FluidLevel += Transfer.Value;
+				if (Cell->FluidLevel <= MinFluidLevel && Transfer.Value < 0)
+				{
+					SparseNextCells.Remove(Transfer.Key);
+					ActiveCellIndices.Remove(Transfer.Key);
+				}
+			}
+			else if (Transfer.Value > 0)
+			{
+				FCAFluidCell NewCell;
+				NewCell.FluidLevel = Transfer.Value;
+				SparseNextCells.Add(Transfer.Key, NewCell);
+				ActiveCellIndices.Add(Transfer.Key);
+			}
+		}
+		
+		return; // Exit early for sparse mode
+	}
+	
+	// Dense mode: original implementation
 	// Simple compression: when a cell is overfilled, push water upward
 	for (int32 z = 0; z < ChunkSize - 1; ++z)
 	{
@@ -859,6 +1165,38 @@ void UFluidChunk::ApplyEvaporation(float DeltaTime)
 	// Apply evaporation to all cells with fluid
 	const float EvaporationAmount = EvaporationRate * DeltaTime;
 	
+	// Handle sparse mode
+	if (bUseSparseRepresentation)
+	{
+		TArray<int32> CellsToRemove;
+		
+		for (auto& CellPair : SparseNextCells)
+		{
+			FCAFluidCell& Cell = CellPair.Value;
+			if (Cell.FluidLevel > 0.0f && !Cell.bIsSolid)
+			{
+				// Evaporate fluid, but don't go below 0
+				Cell.FluidLevel = FMath::Max(0.0f, Cell.FluidLevel - EvaporationAmount);
+				
+				// Mark for removal if fluid is now below threshold
+				if (Cell.FluidLevel <= MinFluidLevel)
+				{
+					CellsToRemove.Add(CellPair.Key);
+				}
+			}
+		}
+		
+		// Remove cells that have evaporated below minimum threshold
+		for (int32 CellIndex : CellsToRemove)
+		{
+			SparseNextCells.Remove(CellIndex);
+			ActiveCellIndices.Remove(CellIndex);
+		}
+		
+		return; // Exit early for sparse mode
+	}
+	
+	// Dense mode: original implementation
 	for (int32 i = 0; i < NextCells.Num(); ++i)
 	{
 		if (NextCells[i].FluidLevel > 0.0f && !NextCells[i].bIsSolid)
@@ -1130,4 +1468,243 @@ int32 UFluidChunk::GetSettledCellCount() const
 {
 	// Removed settling system - always return 0
 	return 0;
+}
+
+// ============================================================================
+// Sparse Grid Implementation
+// ============================================================================
+
+void UFluidChunk::ConvertToSparse()
+{
+	if (bUseSparseRepresentation)
+		return; // Already sparse
+	
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ConvertToSparse);
+	
+	// Clear existing sparse data
+	SparseCells.Empty();
+	ActiveCellIndices.Empty();
+	
+	// Convert dense to sparse
+	int32 NonEmptyCells = 0;
+	const int32 TotalCells = ChunkSize * ChunkSize * ChunkSize;
+	
+	for (int32 i = 0; i < TotalCells; ++i)
+	{
+		const FCAFluidCell& Cell = Cells[i];
+		
+		// Only store cells with fluid or solid terrain
+		if (Cell.FluidLevel > MinFluidLevel || Cell.bIsSolid)
+		{
+			SparseCells.Add(i, Cell);
+			ActiveCellIndices.Add(i);
+			NonEmptyCells++;
+		}
+	}
+	
+	// Calculate occupancy
+	SparseGridOccupancy = (float)NonEmptyCells / (float)TotalCells;
+	
+	// Switch to sparse representation
+	bUseSparseRepresentation = true;
+	
+	// Keep dense arrays sized but clear them (some systems may still expect them to exist)
+	// Don't call Empty() to avoid crashes in other systems that may access these arrays
+	for (int32 i = 0; i < TotalCells; ++i)
+	{
+		Cells[i] = FCAFluidCell();
+		NextCells[i] = FCAFluidCell();
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Chunk %s converted to sparse: %d/%d cells (%.1f%% occupancy)"),
+		*ChunkCoord.ToString(), NonEmptyCells, TotalCells, SparseGridOccupancy * 100.0f);
+}
+
+void UFluidChunk::ConvertToDense()
+{
+	if (!bUseSparseRepresentation)
+		return; // Already dense
+	
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ConvertToDense);
+	
+	// Allocate dense arrays
+	const int32 TotalCells = ChunkSize * ChunkSize * ChunkSize;
+	Cells.SetNum(TotalCells);
+	NextCells.SetNum(TotalCells);
+	
+	// Initialize all cells to empty
+	for (int32 i = 0; i < TotalCells; ++i)
+	{
+		Cells[i] = FCAFluidCell();
+		NextCells[i] = FCAFluidCell();
+	}
+	
+	// Copy sparse cells back to dense array
+	for (const auto& Pair : SparseCells)
+	{
+		Cells[Pair.Key] = Pair.Value;
+		NextCells[Pair.Key] = Pair.Value;
+	}
+	
+	// Switch to dense representation
+	bUseSparseRepresentation = false;
+	SparseGridOccupancy = 1.0f;
+	
+	// Clear sparse data
+	SparseCells.Empty();
+	SparseNextCells.Empty();
+	ActiveCellIndices.Empty();
+	
+	UE_LOG(LogTemp, Log, TEXT("Chunk %s converted to dense"), *ChunkCoord.ToString());
+}
+
+bool UFluidChunk::ShouldUseSparse() const
+{
+	// Use sparse if occupancy is below threshold (30% by default)
+	const float SparseThreshold = 0.3f;
+	return SparseGridOccupancy < SparseThreshold;
+}
+
+void UFluidChunk::UpdateSparseRepresentation()
+{
+	// Check if we should switch between sparse and dense
+	const float CurrentOccupancy = CalculateOccupancy();
+	SparseGridOccupancy = CurrentOccupancy;
+	
+	const float SparseThreshold = 0.3f;
+	const float DenseThreshold = 0.5f; // Hysteresis to prevent thrashing
+	
+	if (!bUseSparseRepresentation && CurrentOccupancy < SparseThreshold)
+	{
+		// Convert to sparse
+		ConvertToSparse();
+	}
+	else if (bUseSparseRepresentation && CurrentOccupancy > DenseThreshold)
+	{
+		// Convert back to dense
+		ConvertToDense();
+	}
+}
+
+float UFluidChunk::CalculateOccupancy() const
+{
+	int32 NonEmptyCells = 0;
+	const int32 TotalCells = ChunkSize * ChunkSize * ChunkSize;
+	
+	if (bUseSparseRepresentation)
+	{
+		NonEmptyCells = SparseCells.Num();
+	}
+	else
+	{
+		for (const FCAFluidCell& Cell : Cells)
+		{
+			if (Cell.FluidLevel > MinFluidLevel || Cell.bIsSolid)
+			{
+				NonEmptyCells++;
+			}
+		}
+	}
+	
+	return (float)NonEmptyCells / (float)TotalCells;
+}
+
+bool UFluidChunk::GetSparseCell(int32 X, int32 Y, int32 Z, FCAFluidCell& OutCell) const
+{
+	if (!IsValidLocalCell(X, Y, Z))
+		return false;
+	
+	const int32 Index = GetLocalCellIndex(X, Y, Z);
+	
+	if (bUseSparseRepresentation)
+	{
+		if (const FCAFluidCell* Cell = SparseCells.Find(Index))
+		{
+			OutCell = *Cell;
+			return true;
+		}
+		else
+		{
+			OutCell = FCAFluidCell(); // Empty cell
+			return true;
+		}
+	}
+	else
+	{
+		OutCell = Cells[Index];
+		return true;
+	}
+}
+
+void UFluidChunk::SetSparseCell(int32 X, int32 Y, int32 Z, const FCAFluidCell& Cell)
+{
+	if (!IsValidLocalCell(X, Y, Z))
+		return;
+	
+	const int32 Index = GetLocalCellIndex(X, Y, Z);
+	
+	if (bUseSparseRepresentation)
+	{
+		if (Cell.FluidLevel > MinFluidLevel || Cell.bIsSolid)
+		{
+			// Add or update cell
+			SparseCells.Add(Index, Cell);
+			ActiveCellIndices.Add(Index);
+		}
+		else
+		{
+			// Remove empty cell
+			SparseCells.Remove(Index);
+			ActiveCellIndices.Remove(Index);
+		}
+	}
+	else
+	{
+		Cells[Index] = Cell;
+	}
+}
+
+bool UFluidChunk::GetSparseNeighbor(int32 DX, int32 DY, int32 DZ, int32 FromX, int32 FromY, int32 FromZ, FCAFluidCell& OutCell) const
+{
+	const int32 NeighborX = FromX + DX;
+	const int32 NeighborY = FromY + DY;
+	const int32 NeighborZ = FromZ + DZ;
+	
+	return GetSparseCell(NeighborX, NeighborY, NeighborZ, OutCell);
+}
+
+int32 UFluidChunk::GetSparseMemoryUsage() const
+{
+	if (bUseSparseRepresentation)
+	{
+		// Each sparse cell entry: key (4 bytes) + value (sizeof(FCAFluidCell))
+		const int32 PerCellMemory = sizeof(int32) + sizeof(FCAFluidCell);
+		const int32 DataMemory = SparseCells.Num() * PerCellMemory;
+		
+		// Overhead for hash table (roughly 2x the data)
+		const int32 HashOverhead = SparseCells.Num() * sizeof(int32) * 2;
+		
+		return DataMemory + HashOverhead;
+	}
+	else
+	{
+		return GetDenseMemoryUsage();
+	}
+}
+
+int32 UFluidChunk::GetDenseMemoryUsage() const
+{
+	const int32 TotalCells = ChunkSize * ChunkSize * ChunkSize;
+	return TotalCells * sizeof(FCAFluidCell) * 2; // Cells + NextCells
+}
+
+float UFluidChunk::GetCompressionRatio() const
+{
+	if (!bUseSparseRepresentation)
+		return 1.0f;
+	
+	const float SparseMemory = (float)GetSparseMemoryUsage();
+	const float DenseMemory = (float)GetDenseMemoryUsage();
+	
+	return DenseMemory / FMath::Max(SparseMemory, 1.0f);
 }

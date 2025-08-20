@@ -1,6 +1,7 @@
 #include "Actors/VoxelFluidActor.h"
 #include "CellularAutomata/FluidChunkManager.h"
 #include "CellularAutomata/FluidChunk.h"
+#include "CellularAutomata/StaticWaterBody.h"
 #include "VoxelIntegration/VoxelFluidIntegration.h"
 #include "Visualization/FluidVisualizationComponent.h"
 #include "Components/BoxComponent.h"
@@ -56,6 +57,8 @@ AVoxelFluidActor::AVoxelFluidActor()
 	VisualizationComponent = CreateDefaultSubobject<UFluidVisualizationComponent>(TEXT("VisualizationComponent"));
 	VisualizationComponent->SetupAttachment(RootComponent);
 	
+	StaticWaterManager = CreateDefaultSubobject<UStaticWaterManager>(TEXT("StaticWaterManager"));
+	
 	ChunkSize = 32;
 	CellSize = 100.0f;
 	ChunkLoadDistance = 8000.0f;
@@ -77,6 +80,13 @@ AVoxelFluidActor::AVoxelFluidActor()
 	MinFluidThreshold = 0.001f;
 	FluidEvaporationRate = 0.0f;
 	FluidDensityMultiplier = 1.0f;
+	
+	// Initialize static water properties
+	bEnableStaticWater = false;
+	bShowStaticWaterBounds = false;
+	bAutoCreateOcean = false;
+	OceanWaterLevel = 0.0f;
+	OceanSize = 100000.0f;
 }
 
 void AVoxelFluidActor::BeginPlay()
@@ -88,6 +98,16 @@ void AVoxelFluidActor::BeginPlay()
 	if (bAutoStart)
 	{
 		StartSimulation();
+	}
+	
+	// Defer static water creation until after first frame to ensure terrain system is ready
+	if (bEnableStaticWater && bAutoCreateOcean)
+	{
+		FTimerHandle TimerHandle;
+		GetWorld()->GetTimerManager().SetTimer(TimerHandle, [this]()
+		{
+			CreateOcean(OceanWaterLevel, OceanSize);
+		}, 0.1f, false);
 	}
 	
 	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: BeginPlay completed with chunked system"));
@@ -189,6 +209,12 @@ void AVoxelFluidActor::InitializeFluidSystem()
 		VoxelIntegration->SetChunkManager(ChunkManager);
 		VoxelIntegration->CellWorldSize = CellSize;
 		
+		// Set static water manager if enabled
+		if (StaticWaterManager && bEnableStaticWater)
+		{
+			ChunkManager->SetStaticWaterManager(StaticWaterManager);
+		}
+		
 		if (TargetVoxelWorld)
 		{
 			VoxelIntegration->InitializeFluidSystem(TargetVoxelWorld);
@@ -200,6 +226,15 @@ void AVoxelFluidActor::InitializeFluidSystem()
 			if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
 			{
 				VoxelIntegration->UpdateTerrainForChunkCoord(ChunkCoord);
+				
+				// Apply static water after terrain has been updated
+				if (StaticWaterManager && bEnableStaticWater)
+				{
+					if (UFluidChunk* Chunk = ChunkManager->GetChunk(ChunkCoord))
+					{
+						StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk);
+					}
+				}
 			}
 		});
 		
@@ -413,6 +448,42 @@ void AVoxelFluidActor::UpdateDebugVisualization()
 	{
 		VisualizationComponent->bEnableFlowVisualization = bShowFlowVectors;
 	}
+	
+	// Draw static water bounds if enabled
+	if (bShowStaticWaterBounds && StaticWaterManager && bEnableStaticWater)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			// Draw bounds for each static water region
+			for (const FStaticWaterRegion& Region : StaticWaterManager->GetStaticWaterRegions())
+			{
+				FColor DebugColor = FColor::Cyan;
+				switch (Region.WaterType)
+				{
+					case EStaticWaterType::Ocean:
+						DebugColor = FColor::Blue;
+						break;
+					case EStaticWaterType::Lake:
+						DebugColor = FColor::Cyan;
+						break;
+					case EStaticWaterType::River:
+						DebugColor = FColor::Green;
+						break;
+				}
+				
+				// Draw the water surface plane
+				DrawDebugBox(World, Region.Bounds.GetCenter(), Region.Bounds.GetExtent(), DebugColor, false, -1.0f, 0, 2.0f);
+				
+				// Draw water level plane
+				FVector PlaneCenter = Region.Bounds.GetCenter();
+				PlaneCenter.Z = Region.WaterLevel;
+				FVector PlaneExtent = Region.Bounds.GetExtent();
+				PlaneExtent.Z = 1.0f;
+				
+				DrawDebugBox(World, PlaneCenter, PlaneExtent, DebugColor.WithAlpha(128), false, -1.0f, 0, 1.0f);
+			}
+		}
+	}
 }
 
 void AVoxelFluidActor::DrawDebugChunks()
@@ -509,6 +580,10 @@ void AVoxelFluidActor::InitializeChunkSystem()
 	ChunkManager->bUsePredictiveSettling = bUsePredictiveSettling;
 	ChunkManager->SleepChainMergeDistance = SleepChainMergeDistance;
 	ChunkManager->PredictiveSettlingConfidenceThreshold = PredictiveSettlingConfidenceThreshold;
+	
+	// Apply sparse grid settings
+	ChunkManager->bUseSparseGrid = bUseSparseGrid;
+	ChunkManager->SparseGridThreshold = SparseGridThreshold;
 	
 	// Apply memory compression if enabled
 	if (bEnableMemoryCompression)
@@ -783,6 +858,35 @@ FString AVoxelFluidActor::GetMemoryUsageStats() const
 	const float SavingsMB = UncompressedMemoryMB - CompressedMemoryMB;
 	const float CompressionRatio = UncompressedMemoryMB > 0 ? (CompressedMemoryMB / UncompressedMemoryMB) : 0.0f;
 	
+	// Calculate sparse grid stats
+	int32 SparseChunkCount = 0;
+	int32 DenseChunkCount = 0;
+	float TotalSparseRatio = 0.0f;
+	float SparseMemorySavings = 0.0f;
+	
+	if (ChunkManager)
+	{
+		TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
+		for (UFluidChunk* Chunk : ActiveChunks)
+		{
+			if (Chunk)
+			{
+				if (Chunk->bUseSparseRepresentation)
+				{
+					SparseChunkCount++;
+					TotalSparseRatio += Chunk->GetCompressionRatio();
+					SparseMemorySavings += (Chunk->GetDenseMemoryUsage() - Chunk->GetSparseMemoryUsage()) / (1024.0f * 1024.0f);
+				}
+				else
+				{
+					DenseChunkCount++;
+				}
+			}
+		}
+	}
+	
+	const float AvgSparseRatio = SparseChunkCount > 0 ? TotalSparseRatio / SparseChunkCount : 0.0f;
+	
 	return FString::Printf(
 		TEXT("=== Memory Usage Stats ===\n")
 		TEXT("Total Active Cells: %d\n")
@@ -791,7 +895,13 @@ FString AVoxelFluidActor::GetMemoryUsageStats() const
 		TEXT("Uncompressed Size: %.2f MB\n")
 		TEXT("Compressed Size: %.2f MB\n")
 		TEXT("Memory Saved: %.2f MB (%.1f%% reduction)\n")
-		TEXT("Compression Ratio: 1:%.1f"),
+		TEXT("Compression Ratio: 1:%.1f\n")
+		TEXT("\n=== Sparse Grid Stats ===\n")
+		TEXT("Sparse Grid: %s\n")
+		TEXT("Sparse Chunks: %d / %d (%.1f%%)\n")
+		TEXT("Average Sparse Ratio: %.2fx\n")
+		TEXT("Sparse Memory Saved: %.2f MB\n")
+		TEXT("Combined Savings: %.2f MB"),
 		TotalCells,
 		bEnableMemoryCompression ? TEXT("ENABLED") : TEXT("DISABLED"),
 		CurrentMemoryMB,
@@ -799,8 +909,155 @@ FString AVoxelFluidActor::GetMemoryUsageStats() const
 		CompressedMemoryMB,
 		SavingsMB,
 		(1.0f - CompressionRatio) * 100.0f,
-		UncompressedMemoryMB > 0 ? (UncompressedMemoryMB / CompressedMemoryMB) : 0.0f
+		UncompressedMemoryMB > 0 ? (UncompressedMemoryMB / CompressedMemoryMB) : 0.0f,
+		bUseSparseGrid ? TEXT("ENABLED") : TEXT("DISABLED"),
+		SparseChunkCount, SparseChunkCount + DenseChunkCount,
+		(SparseChunkCount + DenseChunkCount) > 0 ? (100.0f * SparseChunkCount / (SparseChunkCount + DenseChunkCount)) : 0.0f,
+		AvgSparseRatio,
+		SparseMemorySavings,
+		SavingsMB + SparseMemorySavings
 	);
+}
+
+void AVoxelFluidActor::TestSparseGridPerformance()
+{
+	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("ChunkManager not initialized"));
+		return;
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("=== SPARSE GRID PERFORMANCE TEST ==="));
+	
+	// Test 1: Create a sparse fluid distribution (10% fill)
+	UE_LOG(LogTemp, Warning, TEXT("1. Creating sparse fluid distribution (10%% fill)..."));
+	
+	const FVector TestCenter = GetActorLocation();
+	const float SpawnSpacing = CellSize * 10.0f; // Every 10th cell
+	const int32 TestRange = 5;
+	
+	// Spawn fluid in a sparse pattern
+	int32 TotalSpawned = 0;
+	for (int32 x = -TestRange; x <= TestRange; ++x)
+	{
+		for (int32 y = -TestRange; y <= TestRange; ++y)
+		{
+			for (int32 z = 0; z <= 2; ++z)
+			{
+				FVector SpawnPos = TestCenter + FVector(x * SpawnSpacing, y * SpawnSpacing, z * CellSize);
+				ChunkManager->AddFluidAtWorldPosition(SpawnPos, 0.8f);
+				TotalSpawned++;
+			}
+		}
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("  Spawned %d fluid cells in sparse pattern"), TotalSpawned);
+	
+	// Force update to trigger sparse conversion
+	ChunkManager->UpdateSimulation(0.016f);
+	
+	// Test 2: Measure memory usage
+	UE_LOG(LogTemp, Warning, TEXT("2. Memory usage comparison:"));
+	
+	const FString MemStats = GetMemoryUsageStats();
+	UE_LOG(LogTemp, Warning, TEXT("%s"), *MemStats);
+	
+	// Test 3: Performance timing
+	UE_LOG(LogTemp, Warning, TEXT("3. Performance timing test:"));
+	
+	const double StartTime = FPlatformTime::Seconds();
+	const int32 TestIterations = 100;
+	
+	for (int32 i = 0; i < TestIterations; ++i)
+	{
+		ChunkManager->UpdateSimulation(0.016f);
+	}
+	
+	const double EndTime = FPlatformTime::Seconds();
+	const double TotalTime = (EndTime - StartTime) * 1000.0; // Convert to ms
+	const double AvgTime = TotalTime / TestIterations;
+	
+	UE_LOG(LogTemp, Warning, TEXT("  Simulation time for %d iterations: %.2f ms"), TestIterations, TotalTime);
+	UE_LOG(LogTemp, Warning, TEXT("  Average time per frame: %.3f ms"), AvgTime);
+	
+	// Test 4: Count sparse vs dense chunks
+	TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
+	int32 SparseCount = 0;
+	int32 DenseCount = 0;
+	
+	for (UFluidChunk* Chunk : ActiveChunks)
+	{
+		if (Chunk)
+		{
+			if (Chunk->bUseSparseRepresentation)
+			{
+				SparseCount++;
+				UE_LOG(LogTemp, Log, TEXT("  Chunk %s: SPARSE (%.1f%% occupancy, %.2fx compression)"),
+					*Chunk->ChunkCoord.ToString(),
+					Chunk->SparseGridOccupancy * 100.0f,
+					Chunk->GetCompressionRatio());
+			}
+			else
+			{
+				DenseCount++;
+				UE_LOG(LogTemp, Log, TEXT("  Chunk %s: DENSE (%.1f%% occupancy)"),
+					*Chunk->ChunkCoord.ToString(),
+					Chunk->SparseGridOccupancy * 100.0f);
+			}
+		}
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("4. Chunk distribution:"));
+	UE_LOG(LogTemp, Warning, TEXT("  Sparse chunks: %d"), SparseCount);
+	UE_LOG(LogTemp, Warning, TEXT("  Dense chunks: %d"), DenseCount);
+	UE_LOG(LogTemp, Warning, TEXT("  Total chunks: %d"), SparseCount + DenseCount);
+	
+	// Test 5: Toggle sparse grid and compare
+	UE_LOG(LogTemp, Warning, TEXT("5. Toggling sparse grid for comparison..."));
+	
+	const bool OriginalSparseState = bUseSparseGrid;
+	bUseSparseGrid = !bUseSparseGrid;
+	ChunkManager->bUseSparseGrid = bUseSparseGrid;
+	
+	// Force all chunks to update representation
+	for (UFluidChunk* Chunk : ActiveChunks)
+	{
+		if (Chunk)
+		{
+			if (bUseSparseGrid)
+			{
+				Chunk->ConvertToSparse();
+			}
+			else
+			{
+				Chunk->ConvertToDense();
+			}
+		}
+	}
+	
+	// Measure performance again
+	const double StartTime2 = FPlatformTime::Seconds();
+	
+	for (int32 i = 0; i < TestIterations; ++i)
+	{
+		ChunkManager->UpdateSimulation(0.016f);
+	}
+	
+	const double EndTime2 = FPlatformTime::Seconds();
+	const double TotalTime2 = (EndTime2 - StartTime2) * 1000.0;
+	const double AvgTime2 = TotalTime2 / TestIterations;
+	
+	UE_LOG(LogTemp, Warning, TEXT("  Sparse Grid %s:"), bUseSparseGrid ? TEXT("ENABLED") : TEXT("DISABLED"));
+	UE_LOG(LogTemp, Warning, TEXT("  Average time per frame: %.3f ms"), AvgTime2);
+	UE_LOG(LogTemp, Warning, TEXT("  Performance difference: %.1fx %s"),
+		FMath::Abs(AvgTime / AvgTime2),
+		AvgTime < AvgTime2 ? TEXT("faster") : TEXT("slower"));
+	
+	// Restore original state
+	bUseSparseGrid = OriginalSparseState;
+	ChunkManager->bUseSparseGrid = bUseSparseGrid;
+	
+	UE_LOG(LogTemp, Warning, TEXT("=== TEST COMPLETE ==="));
 }
 
 void AVoxelFluidActor::TestPersistenceWithSourcePause()
@@ -953,4 +1210,202 @@ void AVoxelFluidActor::TestPersistenceWithSourcePause()
 	
 	// Clear test in progress flag
 	bTestInProgress = false;
+}
+
+// Static Water Implementation
+void AVoxelFluidActor::CreateOcean(float WaterLevel, float Size)
+{
+	if (!StaticWaterManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("StaticWaterManager not initialized"));
+		return;
+	}
+	
+	FBox OceanBounds(
+		FVector(-Size, -Size, WaterLevel - 10000.0f),
+		FVector(Size, Size, WaterLevel)
+	);
+	
+	StaticWaterManager->CreateOcean(WaterLevel, OceanBounds);
+	
+	// Apply to all loaded chunks
+	if (bEnableStaticWater)
+	{
+		ApplyStaticWaterToAllChunks();
+		
+		// Schedule a retry after a short delay to catch any chunks that had uninitialized terrain
+		FTimerHandle RetryTimerHandle;
+		GetWorld()->GetTimerManager().SetTimer(RetryTimerHandle, [this]()
+		{
+			UE_LOG(LogTemp, Log, TEXT("Performing delayed retry of static water application"));
+			RetryStaticWaterApplication();
+		}, 1.0f, false);
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Created ocean with water level %f and size %f"), WaterLevel, Size);
+}
+
+void AVoxelFluidActor::CreateLake(const FVector& Center, float Radius, float WaterLevel, float Depth)
+{
+	if (!StaticWaterManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("StaticWaterManager not initialized"));
+		return;
+	}
+	
+	StaticWaterManager->CreateLake(Center, Radius, WaterLevel, Depth);
+	
+	// Apply to all loaded chunks
+	if (bEnableStaticWater)
+	{
+		ApplyStaticWaterToAllChunks();
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Created lake at (%f, %f) with radius %f, water level %f, depth %f"), 
+		Center.X, Center.Y, Radius, WaterLevel, Depth);
+}
+
+void AVoxelFluidActor::CreateRectangularLake(const FVector& Min, const FVector& Max, float WaterLevel)
+{
+	if (!StaticWaterManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("StaticWaterManager not initialized"));
+		return;
+	}
+	
+	FBox LakeBounds(Min, FVector(Max.X, Max.Y, WaterLevel));
+	StaticWaterManager->CreateRectangularLake(LakeBounds, WaterLevel);
+	
+	// Apply to all loaded chunks
+	if (bEnableStaticWater)
+	{
+		ApplyStaticWaterToAllChunks();
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Created rectangular lake with water level %f"), WaterLevel);
+}
+
+void AVoxelFluidActor::ClearStaticWater()
+{
+	if (!StaticWaterManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("StaticWaterManager not initialized"));
+		return;
+	}
+	
+	StaticWaterManager->ClearAllStaticWaterRegions();
+	
+	// Clear static water from all chunks
+	if (ChunkManager)
+	{
+		TArray<UFluidChunk*> AllChunks = ChunkManager->GetActiveChunks();
+		for (UFluidChunk* Chunk : AllChunks)
+		{
+			if (Chunk)
+			{
+				// Clear cells that were marked as static water sources
+				for (int32 i = 0; i < Chunk->Cells.Num(); i++)
+				{
+					if (Chunk->Cells[i].bSourceBlock)
+					{
+						Chunk->Cells[i].FluidLevel = 0.0f;
+						Chunk->Cells[i].bSourceBlock = false;
+						Chunk->Cells[i].bSettled = false;
+					}
+				}
+			}
+		}
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Cleared all static water regions"));
+}
+
+void AVoxelFluidActor::ApplyStaticWaterToAllChunks()
+{
+	if (!StaticWaterManager || !ChunkManager || !bEnableStaticWater)
+	{
+		return;
+	}
+	
+	TArray<UFluidChunk*> AllChunks = ChunkManager->GetActiveChunks();
+	int32 AppliedCount = 0;
+	
+	for (UFluidChunk* Chunk : AllChunks)
+	{
+		if (Chunk)
+		{
+			FBox ChunkBounds = Chunk->GetWorldBounds();
+			if (StaticWaterManager->ChunkIntersectsStaticWater(ChunkBounds))
+			{
+				// Force terrain update first if VoxelIntegration is available
+				if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
+				{
+					VoxelIntegration->UpdateTerrainForChunkCoord(Chunk->ChunkCoord);
+				}
+				
+				// Apply static water with terrain awareness
+				StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk);
+				AppliedCount++;
+			}
+		}
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Applied static water to %d chunks (terrain-aware)"), AppliedCount);
+}
+
+bool AVoxelFluidActor::IsPointInStaticWater(const FVector& WorldPosition) const
+{
+	if (!StaticWaterManager || !bEnableStaticWater)
+	{
+		return false;
+	}
+	
+	return StaticWaterManager->IsPointInStaticWater(WorldPosition);
+}
+
+void AVoxelFluidActor::RetryStaticWaterApplication()
+{
+	if (!StaticWaterManager || !ChunkManager || !bEnableStaticWater)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Cannot retry static water application - system not ready"));
+		return;
+	}
+	
+	TArray<UFluidChunk*> AllChunks = ChunkManager->GetActiveChunks();
+	int32 RetriedCount = 0;
+	
+	UE_LOG(LogTemp, Log, TEXT("Retrying static water application on %d chunks"), AllChunks.Num());
+	
+	for (UFluidChunk* Chunk : AllChunks)
+	{
+		if (Chunk)
+		{
+			FBox ChunkBounds = Chunk->GetWorldBounds();
+			if (StaticWaterManager->ChunkIntersectsStaticWater(ChunkBounds))
+			{
+				// Force terrain update first
+				if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
+				{
+					VoxelIntegration->UpdateTerrainForChunkCoord(Chunk->ChunkCoord);
+				}
+				
+				// Clear any existing static water first
+				for (int32 i = 0; i < Chunk->Cells.Num(); i++)
+				{
+					if (Chunk->Cells[i].bSourceBlock)
+					{
+						Chunk->Cells[i].FluidLevel = 0.0f;
+						Chunk->Cells[i].bSourceBlock = false;
+						Chunk->Cells[i].bSettled = false;
+					}
+				}
+				
+				// Apply static water with terrain awareness
+				StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk);
+				RetriedCount++;
+			}
+		}
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Retried static water application on %d chunks"), RetriedCount);
 }

@@ -10,7 +10,9 @@ class UVoxelFluidIntegration;
 class UFluidVisualizationComponent;
 class UBoxComponent;
 class UBillboardComponent;
+class UStaticWaterManager;
 struct FChunkStreamingConfig;
+struct FStaticWaterRegion;
 
 UCLASS(Blueprintable, BlueprintType)
 class VOXELFLUIDSYSTEM_API AVoxelFluidActor : public AActor
@@ -86,6 +88,9 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UFluidVisualizationComponent* VisualizationComponent;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	UStaticWaterManager* StaticWaterManager;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Settings")
 	AActor* TargetVoxelWorld;
 
@@ -159,6 +164,22 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.0", ClampMax = "20.0"))
 	float FluidDensityMultiplier = 1.0f;
 
+	// Static Water Properties
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water")
+	bool bEnableStaticWater = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water")
+	bool bShowStaticWaterBounds = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water", meta = (EditCondition = "bEnableStaticWater"))
+	bool bAutoCreateOcean = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water", meta = (EditCondition = "bAutoCreateOcean"))
+	float OceanWaterLevel = 0.0f;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water", meta = (EditCondition = "bAutoCreateOcean"))
+	float OceanSize = 100000.0f;
+
 	// Advanced Optimization Settings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Settling")
 	bool bUseSleepChains = true;
@@ -199,6 +220,9 @@ public:
 	
 	UFUNCTION(BlueprintCallable, Category = "Optimization", meta = (CallInEditor = "true"))
 	FString GetMemoryUsageStats() const;
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization", meta = (CallInEditor = "true"))
+	void TestSparseGridPerformance();
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bShowFlowVectors = false;
@@ -258,6 +282,28 @@ public:
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bPauseFluidSources = false;
+
+	// Static Water Body Functions
+	UFUNCTION(BlueprintCallable, Category = "Static Water", meta = (CallInEditor = "true"))
+	void CreateOcean(float WaterLevel = 0.0f, float Size = 100000.0f);
+	
+	UFUNCTION(BlueprintCallable, Category = "Static Water", meta = (CallInEditor = "true"))
+	void CreateLake(const FVector& Center, float Radius, float WaterLevel, float Depth = 1000.0f);
+	
+	UFUNCTION(BlueprintCallable, Category = "Static Water", meta = (CallInEditor = "true"))
+	void CreateRectangularLake(const FVector& Min, const FVector& Max, float WaterLevel);
+	
+	UFUNCTION(BlueprintCallable, Category = "Static Water", meta = (CallInEditor = "true"))
+	void ClearStaticWater();
+	
+	UFUNCTION(BlueprintCallable, Category = "Static Water")
+	void ApplyStaticWaterToAllChunks();
+	
+	UFUNCTION(BlueprintCallable, Category = "Static Water")
+	bool IsPointInStaticWater(const FVector& WorldPosition) const;
+	
+	UFUNCTION(BlueprintCallable, Category = "Static Water", meta = (CallInEditor = "true"))
+	void RetryStaticWaterApplication();
 
 private:
 	TMap<FVector, float> FluidSources;
