@@ -387,8 +387,34 @@ void UStaticWaterManager::ApplyStaticWaterToChunkWithTerrain(UFluidChunk* Chunk,
 	// SPECIAL CASE: If chunk has NO terrain data at all, it's likely a water column chunk
 	bool bIsWaterColumnChunk = (TerrainDataPercentage < 5.0f) && (SolidPercentage < 5.0f);
 	
-	// Also check if this is an INVERTED water column (terrain above but cells not solid due to our fix)
-	bool bIsInvertedWaterColumn = (TerrainDataPercentage > 95.0f) && (SolidPercentage < 5.0f);
+	// Also check if this is an INVERTED water column (terrain above but cells not solid)
+	// This happens when terrain is ABOVE the chunk but chunk is BELOW water level  
+	bool bIsInvertedWaterColumn = false;
+	if ((TerrainDataPercentage > 95.0f) && (SolidPercentage < 5.0f))
+	{
+		// Check if any part of this chunk is below water level
+		for (const FStaticWaterRegion& Region : StaticWaterRegions)
+		{
+			if (Region.IntersectsChunk(ChunkBounds))
+			{
+				// If chunk bottom is below water level, it's a valid water column
+				if (ChunkBounds.Min.Z < Region.WaterLevel)
+				{
+					bIsInvertedWaterColumn = true;
+					UE_LOG(LogTemp, Warning, TEXT("Valid inverted water column: Chunk %s bottom %.1f < WaterLevel %.1f"),
+						*Chunk->ChunkCoord.ToString(), ChunkBounds.Min.Z, Region.WaterLevel);
+					break;
+				}
+			}
+		}
+		
+		// If we have terrain data but no valid water intersection, this is underground space
+		if (!bIsInvertedWaterColumn)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("SKIPPING false water column: Chunk %s has terrain above but not in water region"),
+				*Chunk->ChunkCoord.ToString());
+		}
+	}
 	
 	if (bIsWaterColumnChunk)
 	{
@@ -397,7 +423,7 @@ void UStaticWaterManager::ApplyStaticWaterToChunkWithTerrain(UFluidChunk* Chunk,
 	}
 	else if (bIsInvertedWaterColumn)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("INVERTED WATER COLUMN DETECTED: %s - Has terrain data (%.1f%%) but not solid (%.1f%%)"),
+		UE_LOG(LogTemp, Warning, TEXT("INVERTED WATER COLUMN DETECTED: %s - Has terrain data (%.1f%%) but not solid (%.1f%%), chunk is below water level"),
 			*Chunk->ChunkCoord.ToString(), TerrainDataPercentage, SolidPercentage);
 	}
 	

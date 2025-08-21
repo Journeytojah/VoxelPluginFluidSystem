@@ -451,21 +451,6 @@ float UFluidChunk::GetFluidAt(int32 LocalX, int32 LocalY, int32 LocalZ) const
 
 void UFluidChunk::SetTerrainHeight(int32 LocalX, int32 LocalY, float Height)
 {
-	// CRITICAL FIX: If terrain is way above this chunk, don't mark cells as solid
-	// This handles ocean chunks that are completely underwater but above the sea floor
-	const float ChunkTopZ = ChunkWorldPosition.Z + (ChunkSize * CellSize);
-	
-	// Special case: terrain is above the entire chunk (with small tolerance)
-	// These chunks are water columns between the ocean floor and surface
-	bool bTerrainAboveChunk = (Height > ChunkTopZ + CellSize * 0.5f); 
-	
-	// Debug for problematic chunk
-	if (ChunkCoord.X == 2 && ChunkCoord.Y == 0 && ChunkCoord.Z == -1 && LocalX == 0 && LocalY == 0)
-	{
-		UE_LOG(LogTemp, Error, TEXT("CHUNK (2,0,-1) SetTerrainHeight: Height=%.1f, ChunkTop=%.1f, TerrainAboveChunk=%s"),
-			Height, ChunkTopZ, bTerrainAboveChunk ? TEXT("YES") : TEXT("NO"));
-	}
-	
 	for (int32 z = 0; z < ChunkSize; ++z)
 	{
 		const int32 Idx = GetLocalCellIndex(LocalX, LocalY, z);
@@ -476,26 +461,8 @@ void UFluidChunk::SetTerrainHeight(int32 LocalX, int32 LocalY, float Height)
 			// Calculate the center of the cell for accurate collision detection
 			const float CellWorldZ = ChunkWorldPosition.Z + ((z + 0.5f) * CellSize);
 			
-			// FIXED: Don't mark as solid if terrain is above the entire chunk
-			if (bTerrainAboveChunk)
-			{
-				// This chunk is entirely below terrain surface but in open water
-				// Don't mark cells as solid - they should be water
-				Cells[Idx].bIsSolid = false;
-			}
-			else
-			{
-				// Normal case: Mark as solid if cell center is below terrain
-				Cells[Idx].bIsSolid = (CellWorldZ < Height);
-			}
-			
-			// Debug logging for chunks that should have water
-			if (ChunkCoord.X == 2 && ChunkCoord.Y == 0 && ChunkCoord.Z == -1 && 
-				LocalX == 0 && LocalY == 0 && z == 0)
-			{
-				UE_LOG(LogTemp, Error, TEXT("  Cell[0,0,0]: TerrainHeight=%.1f, CellZ=%.1f, Solid=%s"),
-					Height, CellWorldZ, Cells[Idx].bIsSolid ? TEXT("YES") : TEXT("NO"));
-			}
+			// Standard terrain collision: Mark as solid if cell center is below terrain
+			Cells[Idx].bIsSolid = (CellWorldZ < Height);
 			
 			// Also update the next cells to ensure consistency
 			NextCells[Idx].TerrainHeight = Height;
