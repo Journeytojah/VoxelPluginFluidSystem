@@ -968,6 +968,57 @@ void UStaticWaterManager::CreateDynamicFluidSourcesInRadius(UFluidChunk* Chunk, 
 				
 				CellsShouldHaveWater++;
 				
+				// CRITICAL: Only fill areas that are CONNECTED to existing water
+				// Check if there's existing water nearby (within 3 cells)
+				bool bConnectedToWater = false;
+				const int32 ConnectionRadius = 3;
+				
+				for (int32 CheckZ = -ConnectionRadius; CheckZ <= ConnectionRadius && !bConnectedToWater; CheckZ++)
+				{
+					for (int32 CheckY = -ConnectionRadius; CheckY <= ConnectionRadius && !bConnectedToWater; CheckY++)
+					{
+						for (int32 CheckX = -ConnectionRadius; CheckX <= ConnectionRadius && !bConnectedToWater; CheckX++)
+						{
+							if (CheckX == 0 && CheckY == 0 && CheckZ == 0)
+								continue;
+							
+							int32 NeighborX = LocalX + CheckX;
+							int32 NeighborY = LocalY + CheckY;
+							int32 NeighborZ = LocalZ + CheckZ;
+							
+							// Check bounds
+							if (NeighborX < 0 || NeighborX >= Chunk->ChunkSize ||
+								NeighborY < 0 || NeighborY >= Chunk->ChunkSize ||
+								NeighborZ < 0 || NeighborZ >= Chunk->ChunkSize)
+								continue;
+							
+							int32 NeighborIndex = Chunk->GetLocalCellIndex(NeighborX, NeighborY, NeighborZ);
+							if (Chunk->Cells.IsValidIndex(NeighborIndex))
+							{
+								const FCAFluidCell& NeighborCell = Chunk->Cells[NeighborIndex];
+								
+								// Found existing water nearby (either static or dynamic)
+								if (NeighborCell.FluidLevel > 0.5f)
+								{
+									bConnectedToWater = true;
+								}
+							}
+						}
+					}
+				}
+				
+				// Skip this cell if it's not connected to existing water
+				if (!bConnectedToWater)
+				{
+					static int32 SkipCount = 0;
+					if (SkipCount++ < 10)
+					{
+						UE_LOG(LogTemp, Warning, TEXT("SKIPPING isolated excavation at %s - not connected to existing water"),
+							*CellWorldPos.ToString());
+					}
+					continue;
+				}
+				
 				int32 LinearIndex = Chunk->GetLocalCellIndex(LocalX, LocalY, LocalZ);
 				if (!Chunk->Cells.IsValidIndex(LinearIndex))
 					continue;
