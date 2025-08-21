@@ -486,20 +486,38 @@ void UVoxelFluidIntegration::UpdateTerrainForChunk(const FVector& ChunkWorldMin,
 			const FVector WorldPos = ChunkWorldMin + FVector((LocalX + 0.5f) * CellSize, (LocalY + 0.5f) * CellSize, 0);
 			const float TerrainHeight = SampleVoxelHeight(WorldPos.X, WorldPos.Y);
 			
+			// Special debug for problematic chunk (2,0,-1)
+			if (ChunkCoord.X == 2 && ChunkCoord.Y == 0 && ChunkCoord.Z == -1)
+			{
+				if (LocalX % 8 == 0 && LocalY % 8 == 0) // Sample every 8th cell to reduce spam
+				{
+					UE_LOG(LogTemp, Error, TEXT("PROBLEM CHUNK (2,0,-1) terrain sample [%d,%d]: WorldPos(%f,%f) TerrainHeight=%.1f"),
+						LocalX, LocalY, WorldPos.X, WorldPos.Y, TerrainHeight);
+					
+					// Check if this terrain height would make all cells solid
+					float ChunkTopZ = ChunkWorldMin.Z + ChunkSize * CellSize;
+					if (TerrainHeight > ChunkTopZ)
+					{
+						UE_LOG(LogTemp, Error, TEXT("  >>> TERRAIN TOO HIGH! Height %.1f > ChunkTop %.1f - ALL CELLS WILL BE SOLID!"),
+							TerrainHeight, ChunkTopZ);
+					}
+					else if (TerrainHeight > ChunkWorldMin.Z)
+					{
+						float PercentSolid = ((TerrainHeight - ChunkWorldMin.Z) / (ChunkSize * CellSize)) * 100.0f;
+						UE_LOG(LogTemp, Error, TEXT("  Terrain intersects chunk - approximately %.1f%% will be solid"), PercentSolid);
+					}
+					else
+					{
+						UE_LOG(LogTemp, Error, TEXT("  Terrain is below chunk - should be 0%% solid"));
+					}
+				}
+			}
+			
 			// Set terrain height for this column - this will mark cells as solid based on terrain height
 			Chunk->SetTerrainHeight(LocalX, LocalY, TerrainHeight);
 			
 			// NOTE: SetTerrainHeight already marks cells as solid in the chunk
 			// We don't need to manually iterate through all Z levels here
-			
-			// Debug: Log a few terrain samples
-			static int32 TerrainSampleCount = 0;
-			TerrainSampleCount++;
-			if (TerrainSampleCount <= 5)
-			{
-				UE_LOG(LogTemp, Warning, TEXT("UpdateTerrainForChunk: Sampled terrain at %s: Height=%.1f"), 
-					*WorldPos.ToString(), TerrainHeight);
-			}
 		}
 	}
 	

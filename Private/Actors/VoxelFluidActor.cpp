@@ -313,7 +313,7 @@ void AVoxelFluidActor::InitializeFluidSystem()
 								}
 								
 								// Now apply static water (it will also check bIsSolid)
-								StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk);
+								StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk, ChunkManager);
 							}
 							else
 							{
@@ -338,7 +338,7 @@ void AVoxelFluidActor::InitializeFluidSystem()
 											}
 										}
 										
-										StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(RetryChunk);
+										StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(RetryChunk, ChunkManager);
 									}
 								}, 0.5f, false);
 							}
@@ -1466,7 +1466,7 @@ void AVoxelFluidActor::ApplyStaticWaterToAllChunks()
 				}
 				
 				// Apply static water with terrain awareness
-				StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk);
+				StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk, ChunkManager);
 				AppliedCount++;
 			}
 		}
@@ -1523,7 +1523,7 @@ void AVoxelFluidActor::RetryStaticWaterApplication()
 				}
 				
 				// Apply static water with terrain awareness
-				StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk);
+				StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk, ChunkManager);
 				RetriedCount++;
 			}
 		}

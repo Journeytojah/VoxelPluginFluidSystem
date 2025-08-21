@@ -161,7 +161,7 @@ public:
 	void ApplyStaticWaterToChunk(UFluidChunk* Chunk) const;
 	
 	// Apply static water after terrain has been updated
-	void ApplyStaticWaterToChunkWithTerrain(UFluidChunk* Chunk) const;
+	void ApplyStaticWaterToChunkWithTerrain(UFluidChunk* Chunk, class UFluidChunkManager* ChunkManager = nullptr) const;
 	
 	// Seal chunk borders to prevent water leaking through gaps
 	void SealChunkBordersAgainstTerrain(UFluidChunk* Chunk) const;
