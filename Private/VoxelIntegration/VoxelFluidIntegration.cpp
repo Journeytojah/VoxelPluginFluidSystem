@@ -332,24 +332,35 @@ void UVoxelFluidIntegration::UpdateChunk3DVoxelTerrain(const FFluidChunkCoord& C
 	const float CellSize = Chunk->CellSize;
 	const FVector ChunkOrigin = Chunk->ChunkWorldPosition;
 	
-	// Process each cell in the chunk to determine if it's solid or empty
+	// OPTIMIZATION: Only check cells that are likely to interact with water
+	// Skip very high cells (above terrain) and use terrain height as a guide
 	int32 SolidCellCount = 0;
+	
 	for (int32 LocalX = 0; LocalX < ChunkSize; ++LocalX)
 	{
 		for (int32 LocalY = 0; LocalY < ChunkSize; ++LocalY)
 		{
-			for (int32 LocalZ = 0; LocalZ < ChunkSize; ++LocalZ)
+			// First, get the terrain height for this column
+			const FVector ColumnPos = ChunkOrigin + FVector((LocalX + 0.5f) * CellSize, (LocalY + 0.5f) * CellSize, 0);
+			const float TerrainHeight = SampleVoxelHeight(ColumnPos.X, ColumnPos.Y);
+			
+			// Set the terrain height (this marks cells below as solid automatically)
+			Chunk->SetTerrainHeight(LocalX, LocalY, TerrainHeight);
+			
+			// Only do detailed 3D checks for cells near the terrain surface (within 5 cells up/down)
+			const int32 TerrainCellZ = FMath::Clamp((int32)((TerrainHeight - ChunkOrigin.Z) / CellSize), 0, ChunkSize - 1);
+			const int32 MinZ = FMath::Max(0, TerrainCellZ - 5);
+			const int32 MaxZ = FMath::Min(ChunkSize - 1, TerrainCellZ + 5);
+			
+			for (int32 LocalZ = MinZ; LocalZ <= MaxZ; ++LocalZ)
 			{
-				// Get the world position of the cell center
 				const FVector CellCenter = ChunkOrigin + 
 					FVector((LocalX + 0.5f) * CellSize, 
 						   (LocalY + 0.5f) * CellSize, 
 						   (LocalZ + 0.5f) * CellSize);
 				
-				// Check if this position is inside solid voxel terrain
+				// Only do detailed check for cells near the surface
 				bool bIsSolid = CheckIfCellIsSolid(CellCenter, LocalX, LocalY, LocalZ);
-				
-				// Update the cell's solid state
 				Chunk->SetCellSolid(LocalX, LocalY, LocalZ, bIsSolid);
 				
 				if (bIsSolid)
@@ -477,10 +488,22 @@ void UVoxelFluidIntegration::UpdateTerrainForChunk(const FVector& ChunkWorldMin,
 			
 			// Set terrain height for this column - this will mark cells as solid based on terrain height
 			Chunk->SetTerrainHeight(LocalX, LocalY, TerrainHeight);
+			
+			// NOTE: SetTerrainHeight already marks cells as solid in the chunk
+			// We don't need to manually iterate through all Z levels here
+			
+			// Debug: Log a few terrain samples
+			static int32 TerrainSampleCount = 0;
+			TerrainSampleCount++;
+			if (TerrainSampleCount <= 5)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("UpdateTerrainForChunk: Sampled terrain at %s: Height=%.1f"), 
+					*WorldPos.ToString(), TerrainHeight);
+			}
 		}
 	}
 	
-	UE_LOG(LogTemp, VeryVerbose, TEXT("UpdateTerrainForChunk: Updated terrain for chunk %s"), *ChunkCoord.ToString());
+	UE_LOG(LogTemp, Warning, TEXT("TERRAIN UPDATED: Chunk %s terrain sampling completed"), *ChunkCoord.ToString());
 }
 
 void UVoxelFluidIntegration::UpdateTerrainForChunkCoord(const FFluidChunkCoord& ChunkCoord)

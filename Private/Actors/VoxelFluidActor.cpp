@@ -104,6 +104,13 @@ void AVoxelFluidActor::BeginPlay()
 {
 	Super::BeginPlay();
 	
+	// Ensure ocean water level is reasonable (not at exact ground level)
+	if (OceanWaterLevel >= 0.0f)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Ocean water level %.1f is at or above ground! Setting to -500"), OceanWaterLevel);
+		OceanWaterLevel = -500.0f; // Slightly below typical terrain
+	}
+	
 	InitializeFluidSystem();
 	
 	if (bAutoStart)
@@ -111,14 +118,22 @@ void AVoxelFluidActor::BeginPlay()
 		StartSimulation();
 	}
 	
-	// Defer static water creation until after first frame to ensure terrain system is ready
+	// Create ocean after terrain system is initialized
 	if (bEnableStaticWater && bAutoCreateOcean)
 	{
 		FTimerHandle TimerHandle;
 		GetWorld()->GetTimerManager().SetTimer(TimerHandle, [this]()
 		{
+			// Clear any existing static water first
+			if (StaticWaterManager)
+			{
+				StaticWaterManager->ClearAllStaticWaterRegions();
+			}
+			
+			// Now create ocean with proper level
 			CreateOcean(OceanWaterLevel, OceanSize);
-		}, 0.1f, false);
+			UE_LOG(LogTemp, Log, TEXT("Created ocean with water level %.1f"), OceanWaterLevel);
+		}, 1.0f, false); // Wait 1 second for terrain to be ready
 	}
 	
 	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: BeginPlay completed with chunked system"));
@@ -236,16 +251,104 @@ void AVoxelFluidActor::InitializeFluidSystem()
 		{
 			if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
 			{
+				// Update terrain heights
 				VoxelIntegration->UpdateTerrainForChunkCoord(ChunkCoord);
 				
-				// Apply static water after terrain has been updated
-				if (StaticWaterManager && bEnableStaticWater)
+				// CRITICAL: Clean up any water that might be in solid cells
+				// This handles any race conditions or timing issues
+				if (UFluidChunk* Chunk = ChunkManager->GetChunk(ChunkCoord))
 				{
-					if (UFluidChunk* Chunk = ChunkManager->GetChunk(ChunkCoord))
+					int32 CleanedCells = 0;
+					for (int32 i = 0; i < Chunk->Cells.Num(); ++i)
 					{
-						StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk);
+						// If cell is solid terrain, remove ANY water from it
+						if (Chunk->Cells[i].bIsSolid && Chunk->Cells[i].FluidLevel > 0.0f)
+						{
+							Chunk->Cells[i].FluidLevel = 0.0f;
+							Chunk->Cells[i].bSettled = false;
+							Chunk->Cells[i].bSourceBlock = false;
+							Chunk->NextCells[i].FluidLevel = 0.0f;
+							Chunk->NextCells[i].bSettled = false;
+							Chunk->NextCells[i].bSourceBlock = false;
+							CleanedCells++;
+						}
+					}
+					
+					if (CleanedCells > 0)
+					{
+						UE_LOG(LogTemp, Warning, TEXT("CLEANUP: Removed water from %d solid cells in chunk %s"), 
+							CleanedCells, *ChunkCoord.ToString());
+						Chunk->bDirty = true;
 					}
 				}
+				
+				// Apply static water ONLY after verifying terrain is loaded
+				if (StaticWaterManager && bEnableStaticWater)
+				{
+					// Longer delay and verify terrain before applying water
+					FTimerHandle WaterPlacementHandle;
+					GetWorld()->GetTimerManager().SetTimer(WaterPlacementHandle, [this, ChunkCoord]()
+					{
+						if (UFluidChunk* Chunk = ChunkManager->GetChunk(ChunkCoord))
+						{
+							// Count terrain cells to verify terrain is loaded
+							int32 TerrainCells = 0;
+							for (int32 i = 0; i < FMath::Min(100, Chunk->Cells.Num()); ++i)
+							{
+								if (Chunk->Cells[i].TerrainHeight > -10000.0f && Chunk->Cells[i].TerrainHeight < 10000.0f)
+									TerrainCells++;
+							}
+							
+							// Only apply water if terrain is actually loaded
+							if (TerrainCells > 50) // At least 50% of sampled cells have terrain
+							{
+								// Clean ANY existing water from solid cells first
+								for (int32 i = 0; i < Chunk->Cells.Num(); ++i)
+								{
+									if (Chunk->Cells[i].bIsSolid)
+									{
+										Chunk->Cells[i].FluidLevel = 0.0f;
+										Chunk->Cells[i].bSourceBlock = false;
+									}
+								}
+								
+								// Now apply static water (it will also check bIsSolid)
+								StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk);
+							}
+							else
+							{
+								// Terrain not ready, try again later
+								FTimerHandle RetryHandle;
+								GetWorld()->GetTimerManager().SetTimer(RetryHandle, [this, ChunkCoord]()
+								{
+									if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
+									{
+										VoxelIntegration->UpdateTerrainForChunkCoord(ChunkCoord);
+									}
+									
+									if (UFluidChunk* RetryChunk = ChunkManager->GetChunk(ChunkCoord))
+									{
+										// Clean solid cells
+										for (int32 i = 0; i < RetryChunk->Cells.Num(); ++i)
+										{
+											if (RetryChunk->Cells[i].bIsSolid)
+											{
+												RetryChunk->Cells[i].FluidLevel = 0.0f;
+												RetryChunk->Cells[i].bSourceBlock = false;
+											}
+										}
+										
+										StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(RetryChunk);
+									}
+								}, 0.5f, false);
+							}
+						}
+					}, 0.5f, false); // Wait longer initially
+				}
+			}
+			else
+			{
+				UE_LOG(LogTemp, Error, TEXT("ERROR: VoxelIntegration not available for chunk %s!"), *ChunkCoord.ToString());
 			}
 		});
 		

@@ -5,6 +5,8 @@
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "Async/ParallelFor.h"
+#include "Actors/VoxelFluidActor.h"
+#include "VoxelIntegration/VoxelFluidIntegration.h"
 
 UFluidChunkManager::UFluidChunkManager()
 {
@@ -13,11 +15,11 @@ UFluidChunkManager::UFluidChunkManager()
 	WorldOrigin = FVector::ZeroVector;
 	WorldSize = FVector(100000.0f, 100000.0f, 10000.0f);
 	
-	StreamingConfig.ActiveDistance = 5000.0f;
-	StreamingConfig.LoadDistance = 8000.0f;
-	StreamingConfig.UnloadDistance = 10000.0f;
-	StreamingConfig.MaxActiveChunks = 64;
-	StreamingConfig.MaxLoadedChunks = 128;
+	StreamingConfig.ActiveDistance = 6000.0f;
+	StreamingConfig.LoadDistance = 10000.0f;
+	StreamingConfig.UnloadDistance = 12000.0f;
+	StreamingConfig.MaxActiveChunks = 80;
+	StreamingConfig.MaxLoadedChunks = 160;
 	StreamingConfig.ChunkUpdateInterval = 0.1f;
 	StreamingConfig.LOD1Distance = 2000.0f;
 	StreamingConfig.LOD2Distance = 4000.0f;
@@ -212,8 +214,20 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 	
 	TArray<UFluidChunk*> ActiveChunkArray = GetActiveChunks();
 	
+	// Smart chunk filtering: Only simulate chunks that actually need updates
+	TArray<UFluidChunk*> ChunksNeedingUpdate;
+	ChunksNeedingUpdate.Reserve(ActiveChunkArray.Num());
+	
+	for (UFluidChunk* Chunk : ActiveChunkArray)
+	{
+		if (Chunk && ShouldUpdateChunk(Chunk))
+		{
+			ChunksNeedingUpdate.Add(Chunk);
+		}
+	}
+	
 	// Update critical performance stats
-	SET_DWORD_STAT(STAT_VoxelFluid_ActiveChunks, ActiveChunkArray.Num());
+	SET_DWORD_STAT(STAT_VoxelFluid_ActiveChunks, ChunksNeedingUpdate.Num());
 	SET_DWORD_STAT(STAT_VoxelFluid_LoadedChunks, LoadedChunks.Num());
 	
 	int32 TotalCells = 0, ActiveCells = 0, StaticWaterCells = 0;
@@ -242,17 +256,17 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 	SET_FLOAT_STAT(STAT_VoxelFluid_TotalVolume, TotalVolume);
 	
 	// Use optimized parallel processing
-	if (bUseOptimizedParallelProcessing && ActiveChunkArray.Num() > 2)
+	if (bUseOptimizedParallelProcessing && ChunksNeedingUpdate.Num() > 2)
 	{
 		// Process all chunks in parallel with optimized thread count
 		const int32 OptimalThreads = FMath::Min(8, FMath::Max(1, FPlatformMisc::NumberOfCoresIncludingHyperthreads() * 3 / 4));
-		const int32 BatchSize = FMath::Max(1, ActiveChunkArray.Num() / OptimalThreads);
+		const int32 BatchSize = FMath::Max(1, ChunksNeedingUpdate.Num() / OptimalThreads);
 		
-		ParallelFor(TEXT("FluidChunkUpdate"), ActiveChunkArray.Num(), BatchSize, [&](int32 Index)
+		ParallelFor(TEXT("FluidChunkUpdate"), ChunksNeedingUpdate.Num(), BatchSize, [&](int32 Index)
 		{
-			if (ActiveChunkArray[Index])
+			if (ChunksNeedingUpdate[Index])
 			{
-				ActiveChunkArray[Index]->UpdateSimulation(DeltaTime);
+				ChunksNeedingUpdate[Index]->UpdateSimulation(DeltaTime);
 			}
 		}, EParallelForFlags::None);
 		
@@ -864,6 +878,9 @@ void UFluidChunkManager::SynchronizeChunkBorders()
 {
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_BorderSync);
 	
+	// Removed terrain synchronization - too expensive and not solving the problem
+	// SynchronizeChunkBorderTerrain();
+	
 	// Create a set to track processed chunk pairs to avoid duplicate processing
 	TSet<FString> ProcessedPairs;
 	
@@ -911,6 +928,187 @@ void UFluidChunkManager::SynchronizeChunkBorders()
 		// Clear the border dirty flag after processing
 		Chunk->bBorderDirty = false;
 	}
+}
+
+void UFluidChunkManager::SynchronizeChunkBorderTerrain()
+{
+	// Ensure terrain heights are consistent at chunk borders by using the same world position sampling
+	TSet<FString> ProcessedPairs;
+	
+	for (const FFluidChunkCoord& Coord : ActiveChunkCoords)
+	{
+		UFluidChunk* Chunk = GetChunk(Coord);
+		if (!Chunk)
+			continue;
+			
+		// Check all 6 neighboring chunks (X+1, X-1, Y+1, Y-1, Z+1, Z-1)
+		const TArray<FFluidChunkCoord> NeighborCoords = {
+			FFluidChunkCoord(Coord.X + 1, Coord.Y, Coord.Z),
+			FFluidChunkCoord(Coord.X - 1, Coord.Y, Coord.Z),
+			FFluidChunkCoord(Coord.X, Coord.Y + 1, Coord.Z),
+			FFluidChunkCoord(Coord.X, Coord.Y - 1, Coord.Z),
+			FFluidChunkCoord(Coord.X, Coord.Y, Coord.Z + 1),
+			FFluidChunkCoord(Coord.X, Coord.Y, Coord.Z - 1)
+		};
+		
+		for (const FFluidChunkCoord& NeighborCoord : NeighborCoords)
+		{
+			UFluidChunk* Neighbor = GetChunk(NeighborCoord);
+			if (!Neighbor)
+				continue;
+				
+			// Create pair key to avoid duplicate processing
+			// Sort the coords to ensure consistent key regardless of order
+			FString PairKey;
+			if (Coord.X < NeighborCoord.X || 
+				(Coord.X == NeighborCoord.X && Coord.Y < NeighborCoord.Y) ||
+				(Coord.X == NeighborCoord.X && Coord.Y == NeighborCoord.Y && Coord.Z < NeighborCoord.Z))
+			{
+				PairKey = FString::Printf(TEXT("%s_%s"), *Coord.ToString(), *NeighborCoord.ToString());
+			}
+			else
+			{
+				PairKey = FString::Printf(TEXT("%s_%s"), *NeighborCoord.ToString(), *Coord.ToString());
+			}
+				
+			if (ProcessedPairs.Contains(PairKey))
+				continue;
+				
+			ProcessedPairs.Add(PairKey);
+			
+			// Synchronize terrain heights at the border between these chunks
+			SynchronizeTerrainBetweenChunks(Chunk, Neighbor);
+		}
+	}
+}
+
+void UFluidChunkManager::SynchronizeTerrainBetweenChunks(UFluidChunk* ChunkA, UFluidChunk* ChunkB)
+{
+	if (!ChunkA || !ChunkB)
+		return;
+		
+	const FFluidChunkCoord& CoordA = ChunkA->ChunkCoord;
+	const FFluidChunkCoord& CoordB = ChunkB->ChunkCoord;
+	
+	const int32 DiffX = CoordB.X - CoordA.X;
+	const int32 DiffY = CoordB.Y - CoordA.Y;
+	const int32 DiffZ = CoordB.Z - CoordA.Z;
+	
+	const int32 LocalChunkSize = ChunkA->ChunkSize;
+	
+	// Synchronize terrain heights at borders based on chunk adjacency
+	if (DiffX == 1 && DiffY == 0 && DiffZ == 0) // ChunkB is to the positive X of ChunkA
+	{
+		// Synchronize terrain heights along the X border
+		for (int32 LocalY = 0; LocalY < LocalChunkSize; ++LocalY)
+		{
+			// Get world position at the border (use ChunkA's positive X edge)
+			FVector BorderWorldPos = ChunkA->GetWorldPositionFromLocal(LocalChunkSize - 1, LocalY, 0);
+			BorderWorldPos.Z = 0; // We only care about X,Y for terrain height sampling
+			
+			// Sample terrain height at this exact world position
+			float TerrainHeight = 0.0f;
+			if (AActor* Owner = GetTypedOuter<AActor>())
+			{
+				if (AVoxelFluidActor* FluidActor = Cast<AVoxelFluidActor>(Owner))
+				{
+					if (UVoxelFluidIntegration* Integration = FluidActor->VoxelIntegration)
+					{
+						if (Integration->IsVoxelWorldValid())
+						{
+							TerrainHeight = Integration->SampleVoxelHeight(BorderWorldPos.X, BorderWorldPos.Y);
+						}
+					}
+				}
+			}
+			
+			// Set the same terrain height for both chunks at this border
+			ChunkA->SetTerrainHeight(LocalChunkSize - 1, LocalY, TerrainHeight);
+			ChunkB->SetTerrainHeight(0, LocalY, TerrainHeight);
+		}
+	}
+	else if (DiffX == -1 && DiffY == 0 && DiffZ == 0) // ChunkB is to the negative X of ChunkA
+	{
+		// Synchronize terrain heights along the X border (other direction)
+		for (int32 LocalY = 0; LocalY < LocalChunkSize; ++LocalY)
+		{
+			FVector BorderWorldPos = ChunkA->GetWorldPositionFromLocal(0, LocalY, 0);
+			BorderWorldPos.Z = 0;
+			
+			float TerrainHeight = 0.0f;
+			if (AActor* Owner = GetTypedOuter<AActor>())
+			{
+				if (AVoxelFluidActor* FluidActor = Cast<AVoxelFluidActor>(Owner))
+				{
+					if (UVoxelFluidIntegration* Integration = FluidActor->VoxelIntegration)
+					{
+						if (Integration->IsVoxelWorldValid())
+						{
+							TerrainHeight = Integration->SampleVoxelHeight(BorderWorldPos.X, BorderWorldPos.Y);
+						}
+					}
+				}
+			}
+			
+			ChunkA->SetTerrainHeight(0, LocalY, TerrainHeight);
+			ChunkB->SetTerrainHeight(LocalChunkSize - 1, LocalY, TerrainHeight);
+		}
+	}
+	else if (DiffY == 1 && DiffX == 0 && DiffZ == 0) // ChunkB is to the positive Y of ChunkA
+	{
+		// Synchronize terrain heights along the Y border
+		for (int32 LocalX = 0; LocalX < LocalChunkSize; ++LocalX)
+		{
+			FVector BorderWorldPos = ChunkA->GetWorldPositionFromLocal(LocalX, LocalChunkSize - 1, 0);
+			BorderWorldPos.Z = 0;
+			
+			float TerrainHeight = 0.0f;
+			if (AActor* Owner = GetTypedOuter<AActor>())
+			{
+				if (AVoxelFluidActor* FluidActor = Cast<AVoxelFluidActor>(Owner))
+				{
+					if (UVoxelFluidIntegration* Integration = FluidActor->VoxelIntegration)
+					{
+						if (Integration->IsVoxelWorldValid())
+						{
+							TerrainHeight = Integration->SampleVoxelHeight(BorderWorldPos.X, BorderWorldPos.Y);
+						}
+					}
+				}
+			}
+			
+			ChunkA->SetTerrainHeight(LocalX, LocalChunkSize - 1, TerrainHeight);
+			ChunkB->SetTerrainHeight(LocalX, 0, TerrainHeight);
+		}
+	}
+	else if (DiffY == -1 && DiffX == 0 && DiffZ == 0) // ChunkB is to the negative Y of ChunkA
+	{
+		// Synchronize terrain heights along the Y border (other direction)
+		for (int32 LocalX = 0; LocalX < LocalChunkSize; ++LocalX)
+		{
+			FVector BorderWorldPos = ChunkA->GetWorldPositionFromLocal(LocalX, 0, 0);
+			BorderWorldPos.Z = 0;
+			
+			float TerrainHeight = 0.0f;
+			if (AActor* Owner = GetTypedOuter<AActor>())
+			{
+				if (AVoxelFluidActor* FluidActor = Cast<AVoxelFluidActor>(Owner))
+				{
+					if (UVoxelFluidIntegration* Integration = FluidActor->VoxelIntegration)
+					{
+						if (Integration->IsVoxelWorldValid())
+						{
+							TerrainHeight = Integration->SampleVoxelHeight(BorderWorldPos.X, BorderWorldPos.Y);
+						}
+					}
+				}
+			}
+			
+			ChunkA->SetTerrainHeight(LocalX, 0, TerrainHeight);
+			ChunkB->SetTerrainHeight(LocalX, LocalChunkSize - 1, TerrainHeight);
+		}
+	}
+	// Note: We don't synchronize Z borders as terrain height is 2D (only X,Y dependent)
 }
 
 void UFluidChunkManager::ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk* ChunkB, float DeltaTime)
@@ -1921,4 +2119,36 @@ void UFluidChunkManager::ForceUnloadAllChunks()
 	       ChunksToUnload.Num(), SavedCount, TotalSavedVolume);
 	UE_LOG(LogTemp, Warning, TEXT("Cache now has %d entries using %d KB"),
 	       GetCacheSize(), GetCacheMemoryUsage());
+}
+
+bool UFluidChunkManager::ShouldUpdateChunk(UFluidChunk* Chunk) const
+{
+	if (!Chunk || !Chunk->IsValidLowLevel())
+	{
+		return false;
+	}
+	
+	// Always update chunks with high fluid activity
+	if (Chunk->TotalFluidActivity > 0.1f)
+	{
+		return true;
+	}
+	
+	// Skip chunks that have been fully settled for a while
+	if (Chunk->bFullySettled && Chunk->TotalFluidActivity < 0.001f)
+	{
+		// Only update settled chunks occasionally
+		float TimeSinceLastUpdate = GetWorld() ? GetWorld()->GetTimeSeconds() - Chunk->LastUpdateTime : 0.0f;
+		return TimeSinceLastUpdate > 0.5f; // Update every 500ms for settled chunks
+	}
+	
+	// Skip chunks with very low fluid volume
+	if (Chunk->GetTotalFluidVolume() < 0.01f)
+	{
+		return false;
+	}
+	
+	// Update chunks that haven't been updated recently
+	float TimeSinceLastUpdate = GetWorld() ? GetWorld()->GetTimeSeconds() - Chunk->LastUpdateTime : 0.0f;
+	return TimeSinceLastUpdate > 0.033f; // Update at least every 33ms (30 FPS)
 }

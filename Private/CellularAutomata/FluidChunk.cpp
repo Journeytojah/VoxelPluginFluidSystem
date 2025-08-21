@@ -116,6 +116,58 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_UpdateSimulation);
 	
+	// CRITICAL: First remove any water from solid cells (terrain)
+	// This prevents water from existing inside terrain
+	static int32 GlobalCleanupCount = 0;
+	int32 LocalCleanupCount = 0;
+	for (int32 i = 0; i < Cells.Num(); ++i)
+	{
+		if (Cells[i].bIsSolid && Cells[i].FluidLevel > 0.0f)
+		{
+			LocalCleanupCount++;
+			GlobalCleanupCount++;
+			
+			// Log first few occurrences to debug
+			if (GlobalCleanupCount <= 10)
+			{
+				int32 LocalX = i % ChunkSize;
+				int32 LocalY = (i / ChunkSize) % ChunkSize;
+				int32 LocalZ = i / (ChunkSize * ChunkSize);
+				FVector WorldPos = ChunkWorldPosition + FVector(LocalX * CellSize, LocalY * CellSize, LocalZ * CellSize);
+				
+				UE_LOG(LogTemp, Error, TEXT("WATER IN SOLID TERRAIN! Chunk %s, Cell[%d,%d,%d], WorldPos %s, FluidLevel %.2f, TerrainHeight %.1f"),
+					*ChunkCoord.ToString(), LocalX, LocalY, LocalZ, *WorldPos.ToString(), 
+					Cells[i].FluidLevel, Cells[i].TerrainHeight);
+			}
+			
+			Cells[i].FluidLevel = 0.0f;
+			Cells[i].bSettled = false;
+			Cells[i].bSourceBlock = false;
+			NextCells[i].FluidLevel = 0.0f;
+			NextCells[i].bSettled = false;
+			NextCells[i].bSourceBlock = false;
+		}
+	}
+	
+	if (LocalCleanupCount > 0 && GlobalCleanupCount <= 100)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Cleaned %d water cells from solid terrain in chunk %s"), 
+			LocalCleanupCount, *ChunkCoord.ToString());
+	}
+	
+	// Smart optimization: If chunk has been fully settled for a while, reduce update frequency
+	if (bFullySettled && TotalFluidActivity < 0.001f)
+	{
+		static float SkipTimer = 0.0f;
+		SkipTimer += DeltaTime;
+		if (SkipTimer < 0.1f) // Only update every 100ms for settled chunks
+		{
+			return;
+		}
+		SkipTimer = 0.0f;
+		DeltaTime *= 0.5f; // Use slower timestep for settled chunks
+	}
+	
 	// Check if we should switch between sparse and dense representation
 	UpdateSparseRepresentation();
 	
@@ -408,6 +460,9 @@ void UFluidChunk::SetTerrainHeight(int32 LocalX, int32 LocalY, float Height)
 			
 			// Calculate the center of the cell for accurate collision detection
 			const float CellWorldZ = ChunkWorldPosition.Z + ((z + 0.5f) * CellSize);
+			
+			// Mark as solid if cell center is below terrain
+			// No buffer needed - if center is below terrain, it's solid
 			Cells[Idx].bIsSolid = (CellWorldZ < Height);
 			
 			// Also update the next cells to ensure consistency
@@ -718,7 +773,8 @@ void UFluidChunk::ApplyGravity(float DeltaTime)
 			const int32 CurrentIdx = CellPair.Key;
 			const FCAFluidCell& CurrentCell = CellPair.Value;
 			
-			if (CurrentCell.FluidLevel <= 0.0f)
+			// Skip empty cells and static water source blocks
+			if (CurrentCell.FluidLevel <= 0.0f || CurrentCell.bSourceBlock)
 				continue;
 			
 			// Calculate coordinates from linear index
@@ -806,7 +862,8 @@ void UFluidChunk::ApplyGravity(float DeltaTime)
 				FCAFluidCell& BelowCell = Cells[BelowIdx];
 				
 				// Allow even tiny amounts of fluid to fall with gravity
-				if (CurrentCell.FluidLevel > 0.0f && !BelowCell.bIsSolid)
+				// BUT: Skip source blocks (static water) - they should never flow
+				if (CurrentCell.FluidLevel > 0.0f && !BelowCell.bIsSolid && !CurrentCell.bSourceBlock)
 				{
 					const float SpaceBelow = MaxFluidLevel - BelowCell.FluidLevel;
 					float GravityMultiplier = 1.0f;
@@ -838,6 +895,13 @@ void UFluidChunk::ApplyGravity(float DeltaTime)
 void UFluidChunk::ApplyFlowRules(float DeltaTime)
 {
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ApplyFlowRules);
+	
+	// Smart optimization: Skip flow calculation if chunk has very low activity
+	if (TotalFluidActivity < 0.01f)
+	{
+		return; // Skip flow for nearly settled chunks
+	}
+	
 	// Reduce flow rate for better pooling and accumulation
 	const float FlowAmount = FlowRate * DeltaTime * 0.7f;
 	
@@ -851,7 +915,8 @@ void UFluidChunk::ApplyFlowRules(float DeltaTime)
 			const int32 CurrentIdx = CellPair.Key;
 			const FCAFluidCell& CurrentCell = CellPair.Value;
 			
-			if (CurrentCell.FluidLevel <= 0.0f || CurrentCell.bIsSolid)
+			// Skip empty, solid, or static water source blocks  
+			if (CurrentCell.FluidLevel <= 0.0f || CurrentCell.bIsSolid || CurrentCell.bSourceBlock)
 				continue;
 			
 			// Calculate coordinates from linear index
@@ -927,12 +992,15 @@ void UFluidChunk::ApplyFlowRules(float DeltaTime)
 		return; // Exit early for sparse mode
 	}
 	
-	// Dense mode: original implementation
-	for (int32 z = 0; z < ChunkSize; ++z)
+	// Dense mode: optimized implementation
+	int32 ProcessedCells = 0;
+	const int32 MaxCellsToProcess = (TotalFluidActivity > 0.1f) ? ChunkSize * ChunkSize * ChunkSize : (ChunkSize * ChunkSize * ChunkSize / 4);
+	
+	for (int32 z = 0; z < ChunkSize && ProcessedCells < MaxCellsToProcess; ++z)
 	{
-		for (int32 y = 0; y < ChunkSize; ++y)
+		for (int32 y = 0; y < ChunkSize && ProcessedCells < MaxCellsToProcess; ++y)
 		{
-			for (int32 x = 0; x < ChunkSize; ++x)
+			for (int32 x = 0; x < ChunkSize && ProcessedCells < MaxCellsToProcess; ++x)
 			{
 				const int32 CurrentIdx = GetLocalCellIndex(x, y, z);
 				if (CurrentIdx == -1)
@@ -941,9 +1009,11 @@ void UFluidChunk::ApplyFlowRules(float DeltaTime)
 				FCAFluidCell& CurrentCell = Cells[CurrentIdx];
 				
 				// Don't skip cells with small amounts of fluid - let them accumulate or flow
-				// Only skip completely dry or solid cells
-				if (CurrentCell.FluidLevel <= 0.0f || CurrentCell.bIsSolid)
+				// Only skip completely dry, solid cells, or static water source blocks
+				if (CurrentCell.FluidLevel <= 0.0f || CurrentCell.bIsSolid || CurrentCell.bSourceBlock)
 					continue;
+				
+				ProcessedCells++;
 				
 				bool bHasSolidBelow = false;
 				if (z > 0)

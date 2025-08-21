@@ -14,19 +14,19 @@ struct VOXELFLUIDSYSTEM_API FChunkStreamingConfig
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Streaming")
-	float ActiveDistance = 5000.0f;
+	float ActiveDistance = 6000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Streaming")
-	float LoadDistance = 8000.0f;
+	float LoadDistance = 10000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Streaming")
-	float UnloadDistance = 10000.0f;
+	float UnloadDistance = 12000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Streaming")
-	int32 MaxActiveChunks = 64;
+	int32 MaxActiveChunks = 80;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Streaming")
-	int32 MaxLoadedChunks = 128;
+	int32 MaxLoadedChunks = 160;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Streaming")
 	float ChunkUpdateInterval = 0.1f;
@@ -284,6 +284,8 @@ protected:
 	void UpdateChunkLODs(const TArray<FVector>& ViewerPositions);
 	
 	void SynchronizeChunkBorders();
+	void SynchronizeChunkBorderTerrain();
+	void SynchronizeTerrainBetweenChunks(UFluidChunk* ChunkA, UFluidChunk* ChunkB);
 	void ProcessCrossChunkFlow(UFluidChunk* ChunkA, UFluidChunk* ChunkB, float DeltaTime);
 	
 	float GetDistanceToChunk(const FFluidChunkCoord& Coord, const TArray<FVector>& ViewerPositions) const;
@@ -293,6 +295,8 @@ protected:
 	
 	void ActivateChunk(UFluidChunk* Chunk);
 	void DeactivateChunk(UFluidChunk* Chunk);
+	
+	bool ShouldUpdateChunk(UFluidChunk* Chunk) const;
 	
 	FChunkManagerStats CachedStats;
 	float StatsUpdateTimer = 0.0f;

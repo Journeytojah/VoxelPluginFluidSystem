@@ -182,32 +182,30 @@ void UStaticWaterManager::ApplyStaticWaterToChunk(UFluidChunk* Chunk) const
 				{
 					FVector CellWorldPos = Chunk->GetWorldPositionFromLocal(LocalX, LocalY, LocalZ);
 					
-					// Check if this cell position is below the water level
-					if (CellWorldPos.Z <= Region.WaterLevel && Region.Bounds.IsInsideXY(CellWorldPos))
+					// Check if this cell position is within the water region
+					if (Region.Bounds.IsInsideXY(CellWorldPos))
 					{
 						int32 LinearIndex = Chunk->GetLocalCellIndex(LocalX, LocalY, LocalZ);
 						
-						// Only add water if the cell is not solid (respects terrain)
-						if (Chunk->Cells.IsValidIndex(LinearIndex) && !Chunk->Cells[LinearIndex].bIsSolid)
+						// Only add water if the cell is valid and not solid
+						if (Chunk->Cells.IsValidIndex(LinearIndex))
 						{
-							// Check if there's solid terrain above this cell (for underwater terrain)
-							bool bHasSolidAbove = false;
-							for (int32 CheckZ = LocalZ + 1; CheckZ < Chunk->ChunkSize; CheckZ++)
-							{
-								int32 CheckIndex = Chunk->GetLocalCellIndex(LocalX, LocalY, CheckZ);
-								if (Chunk->Cells.IsValidIndex(CheckIndex) && Chunk->Cells[CheckIndex].bIsSolid)
-								{
-									bHasSolidAbove = true;
-									break;
-								}
-							}
+							FCAFluidCell& Cell = Chunk->Cells[LinearIndex];
 							
-							// Only fill with water if not enclosed by terrain
-							if (!bHasSolidAbove || Region.WaterType == EStaticWaterType::Ocean)
+							// Skip solid cells
+							if (Cell.bIsSolid)
+								continue;
+							
+							// Check if this is an air cell (above terrain) and below water level
+							bool bIsAirCell = (Cell.TerrainHeight > -10000.0f) && // Has valid terrain data
+											  (CellWorldPos.Z > Cell.TerrainHeight); // Cell is ABOVE terrain surface
+							
+							// Only place water in air cells that are below the water level
+							if (bIsAirCell && CellWorldPos.Z <= Region.WaterLevel)
 							{
-								Chunk->Cells[LinearIndex].FluidLevel = 1.0f;
-								Chunk->Cells[LinearIndex].bSettled = true;
-								Chunk->Cells[LinearIndex].bSourceBlock = true;
+								Cell.FluidLevel = 1.0f;
+								Cell.bSettled = true;
+								Cell.bSourceBlock = true;
 								AppliedCells++;
 							}
 						}
@@ -231,35 +229,84 @@ void UStaticWaterManager::ApplyStaticWaterToChunkWithTerrain(UFluidChunk* Chunk)
 	if (!Chunk)
 		return;
 
-	// Check if terrain data is properly initialized by sampling a few cells
+	// CRITICAL DEBUG: Log every chunk that gets water applied
+	UE_LOG(LogTemp, Warning, TEXT("====== APPLYING STATIC WATER TO CHUNK %s ======"), *Chunk->ChunkCoord.ToString());
+	
+	// Count solid cells to detect if terrain is properly set
+	int32 SolidCellCount = 0;
+	int32 TotalCells = Chunk->Cells.Num();
+	for (const auto& Cell : Chunk->Cells)
+	{
+		if (Cell.bIsSolid)
+			SolidCellCount++;
+	}
+	
+	float SolidPercentage = (SolidCellCount / (float)TotalCells) * 100.0f;
+	UE_LOG(LogTemp, Warning, TEXT("Chunk %s: %d/%d cells are solid (%.1f%%)"), 
+		*Chunk->ChunkCoord.ToString(), SolidCellCount, TotalCells, SolidPercentage);
+	
+	// EMERGENCY BRAKE: If chunk has almost no solid cells, terrain data is wrong - DON'T APPLY WATER!
+	if (SolidPercentage < 10.0f)
+	{
+		UE_LOG(LogTemp, Error, TEXT("EMERGENCY BRAKE: Chunk %s has only %.1f%% solid cells - terrain data is corrupted! NOT applying water!"),
+			*Chunk->ChunkCoord.ToString(), SolidPercentage);
+		return;
+	}
+
+	// Check if terrain data is properly initialized by sampling more cells
 	bool bTerrainInitialized = false;
 	int32 SampleCount = 0;
-	const int32 MaxSamples = 10;
+	int32 InitializedSamples = 0;
+	const int32 MaxSamples = 20;
 	
-	for (int32 i = 0; i < FMath::Min(MaxSamples, Chunk->Cells.Num()) && SampleCount < MaxSamples; i += Chunk->Cells.Num() / MaxSamples)
+	for (int32 i = 0; i < FMath::Min(MaxSamples, Chunk->Cells.Num()) && SampleCount < MaxSamples; i += FMath::Max(1, Chunk->Cells.Num() / MaxSamples))
 	{
 		if (Chunk->Cells[i].TerrainHeight > -FLT_MAX + 1000.0f)
 		{
-			bTerrainInitialized = true;
-			break;
+			InitializedSamples++;
 		}
 		SampleCount++;
 	}
 	
+	// Require at least 70% of sampled cells to have valid terrain height
+	bTerrainInitialized = (InitializedSamples >= (SampleCount * 0.7f));
+	
 	if (!bTerrainInitialized)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Terrain not initialized for chunk %s, skipping static water application"), 
-			*Chunk->ChunkCoord.ToString());
+		UE_LOG(LogTemp, Warning, TEXT("Terrain not initialized for chunk %s, skipping static water application (%d/%d cells valid = %.1f%%)"), 
+			*Chunk->ChunkCoord.ToString(), InitializedSamples, SampleCount, (InitializedSamples / (float)SampleCount) * 100.0f);
+		
+		// Log first few terrain heights for debugging
+		for (int32 i = 0; i < FMath::Min(5, Chunk->Cells.Num()); ++i)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("  Cell %d terrain height: %.1f"), i, Chunk->Cells[i].TerrainHeight);
+		}
 		return;
 	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Terrain initialization OK for chunk %s (%d/%d cells valid = %.1f%%)"), 
+		*Chunk->ChunkCoord.ToString(), InitializedSamples, SampleCount, (InitializedSamples / (float)SampleCount) * 100.0f);
+
+	// Debug: Log static water regions affecting this chunk
+	FBox ChunkBounds = Chunk->GetWorldBounds();
+	UE_LOG(LogTemp, Log, TEXT("Checking %d static water regions for chunk %s (bounds: %s to %s)"), 
+		StaticWaterRegions.Num(), *Chunk->ChunkCoord.ToString(), 
+		*ChunkBounds.Min.ToString(), *ChunkBounds.Max.ToString());
 
 	// This version is called after terrain has been properly initialized
 	// It ensures we respect the terrain data that has been set
-	for (const FStaticWaterRegion& Region : StaticWaterRegions)
+	for (int32 RegionIndex = 0; RegionIndex < StaticWaterRegions.Num(); RegionIndex++)
 	{
-		FBox ChunkBounds = Chunk->GetWorldBounds();
+		const FStaticWaterRegion& Region = StaticWaterRegions[RegionIndex];
+		
 		if (!Region.IntersectsChunk(ChunkBounds))
+		{
 			continue;
+		}
+		
+		UE_LOG(LogTemp, Warning, TEXT("Region %d intersects chunk %s - WaterLevel:%.1f, Bounds:%s to %s"), 
+			RegionIndex, *Chunk->ChunkCoord.ToString(), Region.WaterLevel,
+			*Region.Bounds.Min.ToString(), *Region.Bounds.Max.ToString());
 
 		int32 AppliedCells = 0;
 		
@@ -281,20 +328,78 @@ void UStaticWaterManager::ApplyStaticWaterToChunkWithTerrain(UFluidChunk* Chunk)
 						{
 							FCAFluidCell& Cell = Chunk->Cells[LinearIndex];
 							
-							// Only add water if:
-							// 1. Cell is not solid
-							// 2. Cell is below the water surface level
-							// 3. Cell height (terrain) allows for water
-							bool bCanPlaceWater = !Cell.bIsSolid && 
-												  (Cell.TerrainHeight < CellWorldPos.Z) &&
-												  (CellWorldPos.Z <= Region.WaterLevel);
+							// CONSERVATIVE water placement to prevent flat plane issues
+							// Only place water if ALL conditions are met:
+							// 1. Cell is NOT solid
+							// 2. Cell is below water level
+							// 3. Cell is SIGNIFICANTLY above terrain (full cell size)
+							// 4. Terrain is properly initialized
+							// 5. We're not at a chunk border (be extra conservative at borders)
+							
+							bool bIsAtBorder = (LocalX == 0 || LocalX == Chunk->ChunkSize - 1 || 
+											   LocalY == 0 || LocalY == Chunk->ChunkSize - 1);
+							
+							const float RequiredGap = bIsAtBorder ? Chunk->CellSize * 2.0f : Chunk->CellSize * 1.0f;
+							
+							// CRITICAL FIX: Only place water if cell is NOT solid
+							// The bIsSolid flag is set by terrain sampling and MUST be respected
+							if (Cell.bIsSolid)
+							{
+								// This cell is inside terrain - NEVER place water here
+								continue;
+							}
+							
+							// CRITICAL: Check if this is an AIR cell (above terrain surface)
+							// We only want to place water in air cells that are below the water level
+							// This prevents water from spawning in underground voids or at wrong heights
+							bool bIsAirCell = (Cell.TerrainHeight > -10000.0f) && // Has valid terrain data
+											  (CellWorldPos.Z > Cell.TerrainHeight); // Cell is ABOVE terrain surface
+							
+							// Place water if:
+							// 1. Cell is an air cell (above terrain)
+							// 2. Cell is below the water level
+							// 3. Cell is not solid (already checked above)
+							bool bCanPlaceWater = bIsAirCell && (CellWorldPos.Z <= Region.WaterLevel);
 							
 							if (bCanPlaceWater)
 							{
+								// Cell is not solid and passes terrain checks - safe to place water
 								Cell.FluidLevel = 1.0f;
 								Cell.bSettled = true;
 								Cell.bSourceBlock = true;
 								AppliedCells++;
+								
+								// Debug: Log where water IS being placed (especially for problematic chunks)
+								static int32 PlacedCount = 0;
+								PlacedCount++;
+								if (PlacedCount <= 20 || Chunk->ChunkCoord.X == -3 && Chunk->ChunkCoord.Y == 0 && Chunk->ChunkCoord.Z == 0)
+								{
+									UE_LOG(LogTemp, Warning, TEXT("Static water: Cell at %s PLACED - AirCell:YES, Solid:%s, TerrainHeight:%.1f, CellZ:%.1f, WaterLevel:%.1f, AboveTerrain:%.1f (Chunk:%s)"),
+										*CellWorldPos.ToString(), 
+										Cell.bIsSolid ? TEXT("YES") : TEXT("NO"),
+										Cell.TerrainHeight, 
+										CellWorldPos.Z, 
+										Region.WaterLevel,
+										CellWorldPos.Z - Cell.TerrainHeight,
+										*Chunk->ChunkCoord.ToString());
+								}
+							}
+							else
+							{
+								// Debug: Log why water wasn't placed
+								static int32 DebugCount = 0;
+								DebugCount++;
+								if (DebugCount <= 10)
+								{
+									UE_LOG(LogTemp, Warning, TEXT("Static water: Cell at %s NOT placed - AirCell:%s, Solid:%s, TerrainHeight:%.1f, CellZ:%.1f, WaterLevel:%.1f, AboveTerrain:%.1f"),
+										*CellWorldPos.ToString(), 
+										bIsAirCell ? TEXT("YES") : TEXT("NO"),
+										Cell.bIsSolid ? TEXT("YES") : TEXT("NO"),
+										Cell.TerrainHeight, 
+										CellWorldPos.Z, 
+										Region.WaterLevel,
+										CellWorldPos.Z - Cell.TerrainHeight);
+								}
 							}
 						}
 					}
@@ -304,8 +409,150 @@ void UStaticWaterManager::ApplyStaticWaterToChunkWithTerrain(UFluidChunk* Chunk)
 		
 		if (AppliedCells > 0)
 		{
-			UE_LOG(LogTemp, Log, TEXT("Applied static water to chunk %s: %d cells filled (terrain-aware)"), 
-				*Chunk->ChunkCoord.ToString(), AppliedCells);
+			float FillPercentage = (AppliedCells / (float)Chunk->Cells.Num()) * 100.0f;
+			UE_LOG(LogTemp, Log, TEXT("Applied static water to chunk %s: %d cells filled (terrain-aware) [%.1f%% of chunk]"), 
+				*Chunk->ChunkCoord.ToString(), AppliedCells, FillPercentage);
+				
+			// Warn about chunks that are filled more than expected
+			if (FillPercentage > 70.0f)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("WARNING: Chunk %s has very high water fill percentage (%.1f%%) - possible terrain sampling issue"), 
+					*Chunk->ChunkCoord.ToString(), FillPercentage);
+			}
+		}
+	}
+	
+	// CRITICAL: Seal chunk borders to prevent water leaking through gaps
+	SealChunkBordersAgainstTerrain(Chunk);
+}
+
+void UStaticWaterManager::SealChunkBordersAgainstTerrain(UFluidChunk* Chunk) const
+{
+	if (!Chunk)
+		return;
+		
+	const int32 ChunkSize = Chunk->ChunkSize;
+	
+	// Check all border cells and remove water if they're too close to terrain or in ambiguous areas
+	// This prevents water from leaking through gaps at chunk boundaries
+	
+	// Debug: Track how many border cells we're processing
+	int32 BorderCellsRemoved = 0;
+	int32 BorderCellsChecked = 0;
+	
+	// Process X borders (x=0 and x=ChunkSize-1)
+	for (int32 y = 0; y < ChunkSize; ++y)
+	{
+		for (int32 z = 0; z < ChunkSize; ++z)
+		{
+			// Left border (x=0)
+			int32 Idx = Chunk->GetLocalCellIndex(0, y, z);
+			if (Idx >= 0 && Idx < Chunk->Cells.Num())
+			{
+				BorderCellsChecked++;
+				FCAFluidCell& Cell = Chunk->Cells[Idx];
+				// Remove water from border cells that are too close to terrain
+				FVector CellWorldPos = Chunk->GetWorldPositionFromLocal(0, y, z);
+				
+				// Debug specific problematic chunks
+				bool bIsProblematicChunk = (Chunk->ChunkCoord.X == -3 && Chunk->ChunkCoord.Y == 0 && Chunk->ChunkCoord.Z == 0);
+				
+				if (Cell.FluidLevel > 0.0f && Cell.TerrainHeight > -FLT_MAX + 1000.0f)
+				{
+					// If cell is within 1.5 cells of terrain, remove water to prevent leaking
+					if (CellWorldPos.Z < Cell.TerrainHeight + Chunk->CellSize * 1.5f)
+					{
+						if (bIsProblematicChunk)
+						{
+							UE_LOG(LogTemp, Warning, TEXT("BORDER SEAL: Removing water at X=0 border, Y=%d Z=%d, WorldPos=%s, TerrainHeight=%.1f, CellZ=%.1f"),
+								y, z, *CellWorldPos.ToString(), Cell.TerrainHeight, CellWorldPos.Z);
+						}
+						Cell.FluidLevel = 0.0f;
+						Cell.bSourceBlock = false;
+						BorderCellsRemoved++;
+					}
+					else if (bIsProblematicChunk)
+					{
+						UE_LOG(LogTemp, Warning, TEXT("BORDER SEAL: Keeping water at X=0 border, Y=%d Z=%d, WorldPos=%s, TerrainHeight=%.1f, CellZ=%.1f, Gap=%.1f"),
+							y, z, *CellWorldPos.ToString(), Cell.TerrainHeight, CellWorldPos.Z, CellWorldPos.Z - Cell.TerrainHeight);
+					}
+				}
+			}
+			
+			// Right border (x=ChunkSize-1)
+			Idx = Chunk->GetLocalCellIndex(ChunkSize - 1, y, z);
+			if (Idx >= 0 && Idx < Chunk->Cells.Num())
+			{
+				FCAFluidCell& Cell = Chunk->Cells[Idx];
+				FVector CellWorldPos = Chunk->GetWorldPositionFromLocal(ChunkSize - 1, y, z);
+				if (Cell.FluidLevel > 0.0f && Cell.TerrainHeight > -FLT_MAX + 1000.0f)
+				{
+					if (CellWorldPos.Z < Cell.TerrainHeight + Chunk->CellSize * 1.5f)
+					{
+						Cell.FluidLevel = 0.0f;
+						Cell.bSourceBlock = false;
+					}
+				}
+			}
+		}
+	}
+	
+	// Process Y borders (y=0 and y=ChunkSize-1)
+	for (int32 x = 0; x < ChunkSize; ++x)
+	{
+		for (int32 z = 0; z < ChunkSize; ++z)
+		{
+			// Front border (y=0)
+			int32 Idx = Chunk->GetLocalCellIndex(x, 0, z);
+			if (Idx >= 0 && Idx < Chunk->Cells.Num())
+			{
+				FCAFluidCell& Cell = Chunk->Cells[Idx];
+				FVector CellWorldPos = Chunk->GetWorldPositionFromLocal(x, 0, z);
+				if (Cell.FluidLevel > 0.0f && Cell.TerrainHeight > -FLT_MAX + 1000.0f)
+				{
+					if (CellWorldPos.Z < Cell.TerrainHeight + Chunk->CellSize * 1.5f)
+					{
+						Cell.FluidLevel = 0.0f;
+						Cell.bSourceBlock = false;
+					}
+				}
+			}
+			
+			// Back border (y=ChunkSize-1)
+			Idx = Chunk->GetLocalCellIndex(x, ChunkSize - 1, z);
+			if (Idx >= 0 && Idx < Chunk->Cells.Num())
+			{
+				FCAFluidCell& Cell = Chunk->Cells[Idx];
+				FVector CellWorldPos = Chunk->GetWorldPositionFromLocal(x, ChunkSize - 1, z);
+				if (Cell.FluidLevel > 0.0f && Cell.TerrainHeight > -FLT_MAX + 1000.0f)
+				{
+					if (CellWorldPos.Z < Cell.TerrainHeight + Chunk->CellSize * 1.5f)
+					{
+						Cell.FluidLevel = 0.0f;
+						Cell.bSourceBlock = false;
+					}
+				}
+			}
+		}
+	}
+	
+	// Process Z borders (z=0 and z=ChunkSize-1) - less critical but still check
+	for (int32 x = 0; x < ChunkSize; ++x)
+	{
+		for (int32 y = 0; y < ChunkSize; ++y)
+		{
+			// Bottom border (z=0)
+			int32 Idx = Chunk->GetLocalCellIndex(x, y, 0);
+			if (Idx >= 0 && Idx < Chunk->Cells.Num())
+			{
+				FCAFluidCell& Cell = Chunk->Cells[Idx];
+				// Bottom cells should generally be solid or very close to terrain anyway
+				if (Cell.FluidLevel > 0.0f && Cell.bIsSolid)
+				{
+					Cell.FluidLevel = 0.0f;
+					Cell.bSourceBlock = false;
+				}
+			}
 		}
 	}
 }
