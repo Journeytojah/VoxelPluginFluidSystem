@@ -2,6 +2,8 @@
 #include "VoxelIntegration/VoxelTerrainSampler.h"
 #include "CellularAutomata/FluidChunkManager.h"
 #include "CellularAutomata/FluidChunk.h"
+#include "CellularAutomata/StaticWaterBody.h"
+#include "Actors/VoxelFluidActor.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "Components/SceneComponent.h"
@@ -820,6 +822,20 @@ void UVoxelFluidIntegration::RefreshTerrainInRadius(const FVector& Center, float
 				// Mark chunk dirty and force mesh update
 				Chunk->bDirty = true;
 				Chunk->MarkMeshDataDirty();
+				
+				// CRITICAL FIX: Trigger dynamic water refill for terrain changes
+				if (AActor* Owner = GetOwner())
+				{
+					if (AVoxelFluidActor* FluidActor = Cast<AVoxelFluidActor>(Owner))
+					{
+						if (FluidActor->StaticWaterManager)
+						{
+							UE_LOG(LogTemp, Warning, TEXT("Triggering dynamic water refill for chunk %s after terrain change"),
+								*ChunkCoord.ToString());
+							FluidActor->StaticWaterManager->CreateDynamicFluidSourcesInRadius(Chunk, Center, Radius);
+						}
+					}
+				}
 			}
 		}
 		
