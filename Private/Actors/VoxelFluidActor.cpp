@@ -15,14 +15,6 @@
 #include "VoxelFluidStats.h"
 #include "GameFramework/PlayerController.h"
 
-// Temporary definitions until build system picks up VoxelFluidDebug.cpp
-DEFINE_LOG_CATEGORY(LogVoxelFluidDebug);
-TAutoConsoleVariable<bool> CVarEnableVoxelFluidDebugLogging(
-	TEXT("voxelfluid.EnableDebugLogging"),
-	false,
-	TEXT("Enable debug logging for VoxelFluid system components"),
-	ECVF_Default
-);
 
 AVoxelFluidActor::AVoxelFluidActor()
 {
