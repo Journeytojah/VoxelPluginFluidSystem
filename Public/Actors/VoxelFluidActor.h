@@ -116,16 +116,16 @@ public:
 	float CellSize = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
-	float ChunkLoadDistance = 8000.0f;
+	float ChunkLoadDistance = 20000.0f; // Increased from 8000 for more distance
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
-	float ChunkActiveDistance = 5000.0f;
+	float ChunkActiveDistance = 15000.0f; // Increased from 5000 for more active chunks
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
-	int32 MaxActiveChunks = 64;
+	int32 MaxActiveChunks = 200; // Increased from 64 for more chunks
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
-	int32 MaxLoadedChunks = 128;
+	int32 MaxLoadedChunks = 400; // Increased from 128 for more chunks
 
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
@@ -135,7 +135,7 @@ public:
 	float LOD2Distance = 4000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Bounds", meta = (CallInEditor = "true"))
-	FVector SimulationBoundsExtent = FVector(6400.0f, 6400.0f, 1600.0f);
+	FVector SimulationBoundsExtent = FVector(25600.0f, 25600.0f, 3200.0f); // Much larger for more chunks
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Bounds")
 	FVector SimulationBoundsOffset = FVector::ZeroVector;
@@ -223,6 +223,43 @@ public:
 	
 	UFUNCTION(BlueprintCallable, Category = "Optimization", meta = (CallInEditor = "true"))
 	void TestSparseGridPerformance();
+	
+	// Octree optimization methods
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Octree")
+	bool bUseOctreeOptimization = true;
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
+	void ToggleOctreeOptimization();
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
+	FString GetOctreePerformanceStats() const;
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
+	void OptimizeOctreeStructure();
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree")
+	int32 GetOctreeNodeCount() const;
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
+	void TestOctreeVisualization();
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
+	void ForceDrawOctreeDebug();
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
+	void CreateTestFluidCluster();
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
+	void CreateWideHorizontalFluidPattern();
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
+	void ExpandSimulationBounds();
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Octree")
+	bool bShowOctreeDebug = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Octree", meta = (ClampMin = "1000.0", ClampMax = "50000.0"))
+	float OctreeDebugDrawDistance = 15000.0f; // Increased default for better visibility
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bShowFlowVectors = false;

@@ -186,7 +186,7 @@ void AVoxelFluidActor::Tick(float DeltaTime)
 		LastFrameSimulationTime = (FPlatformTime::Seconds() - StartTime) * 1000.0f; // Convert to ms
 	}
 	
-	if (bShowFlowVectors)
+	if (bShowFlowVectors || bShowOctreeDebug || bShowChunkBorders || bShowChunkStates)
 	{
 		UpdateDebugVisualization();
 	}
@@ -544,6 +544,10 @@ void AVoxelFluidActor::UpdateDebugVisualization()
 		ChunkManager->bShowChunkStates = bShowChunkStates;
 		ChunkManager->DebugUpdateInterval = ChunkDebugUpdateInterval;
 		
+		// Update octree debug settings
+		ChunkManager->bDrawOctreeDebug = bShowOctreeDebug;
+		ChunkManager->OctreeDebugDrawDistance = OctreeDebugDrawDistance;
+		
 		if (ChunkManager->ShouldUpdateDebugVisualization())
 		{
 			if (UWorld* World = GetWorld())
@@ -698,6 +702,16 @@ void AVoxelFluidActor::InitializeChunkSystem()
 	// Apply sparse grid settings
 	ChunkManager->bUseSparseGrid = bUseSparseGrid;
 	ChunkManager->SparseGridThreshold = SparseGridThreshold;
+	
+	// Configure octree optimization
+	ChunkManager->bUseOctree = bUseOctreeOptimization;
+	ChunkManager->bDrawOctreeDebug = bShowOctreeDebug;
+	ChunkManager->OctreeDebugDrawDistance = OctreeDebugDrawDistance;
+	
+	if (bUseOctreeOptimization)
+	{
+		ChunkManager->EnableOctreeOptimization(true);
+	}
 	
 	// Apply memory compression if enabled
 	if (bEnableMemoryCompression)
@@ -1761,4 +1775,368 @@ void AVoxelFluidActor::TestTerrainRefreshAtLocation(const FVector& Location, flo
 	
 	// Now test the static water refill
 	RefillStaticWaterInRadius(Location, Radius);
+}
+
+void AVoxelFluidActor::ToggleOctreeOptimization()
+{
+	bUseOctreeOptimization = !bUseOctreeOptimization;
+	
+	if (ChunkManager)
+	{
+		ChunkManager->EnableOctreeOptimization(bUseOctreeOptimization);
+		ChunkManager->bUseOctree = bUseOctreeOptimization;
+		ChunkManager->bDrawOctreeDebug = bShowOctreeDebug;
+		ChunkManager->OctreeDebugDrawDistance = OctreeDebugDrawDistance;
+		
+		UE_LOG(LogTemp, Warning, TEXT("========================================"));
+		UE_LOG(LogTemp, Warning, TEXT("Octree optimization %s"), 
+			bUseOctreeOptimization ? TEXT("ENABLED") : TEXT("DISABLED"));
+		
+		if (bUseOctreeOptimization)
+		{
+			FString Stats = ChunkManager->GetOctreeStats();
+			UE_LOG(LogTemp, Warning, TEXT("Octree Stats: %s"), *Stats);
+			
+			// Additional diagnostics
+			UE_LOG(LogTemp, Warning, TEXT("Debug Draw Enabled: %s"), bShowOctreeDebug ? TEXT("YES") : TEXT("NO"));
+			UE_LOG(LogTemp, Warning, TEXT("Debug Draw Distance: %.0f"), OctreeDebugDrawDistance);
+			UE_LOG(LogTemp, Warning, TEXT("Loaded Chunks: %d"), ChunkManager->GetLoadedChunkCount());
+			UE_LOG(LogTemp, Warning, TEXT("Active Chunks: %d"), ChunkManager->GetActiveChunkCount());
+		}
+		UE_LOG(LogTemp, Warning, TEXT("========================================"));
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("ChunkManager is NULL!"));
+	}
+}
+
+FString AVoxelFluidActor::GetOctreePerformanceStats() const
+{
+	if (!ChunkManager)
+	{
+		return TEXT("ChunkManager not initialized");
+	}
+	
+	FString Stats = FString::Printf(TEXT("Octree Optimization: %s\n"), 
+		bUseOctreeOptimization ? TEXT("Enabled") : TEXT("Disabled"));
+	
+	if (bUseOctreeOptimization)
+	{
+		Stats += ChunkManager->GetOctreeStats() + TEXT("\n");
+		
+		// Add performance comparison
+		int32 TotalChunks = ChunkManager->GetLoadedChunkCount();
+		int32 ActiveChunks = ChunkManager->GetActiveChunkCount();
+		
+		Stats += FString::Printf(TEXT("Total Chunks: %d\n"), TotalChunks);
+		Stats += FString::Printf(TEXT("Active Chunks: %d\n"), ActiveChunks);
+		
+		// Estimate performance improvement
+		if (TotalChunks > 0)
+		{
+			float LinearComplexity = TotalChunks * TotalChunks;
+			float OctreeComplexity = TotalChunks * FMath::Log2((float)TotalChunks);
+			float Improvement = (LinearComplexity - OctreeComplexity) / LinearComplexity * 100.0f;
+			
+			Stats += FString::Printf(TEXT("Theoretical Performance Improvement: %.1f%%\n"), Improvement);
+		}
+	}
+	
+	return Stats;
+}
+
+void AVoxelFluidActor::OptimizeOctreeStructure()
+{
+	if (!ChunkManager || !bUseOctreeOptimization)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Cannot optimize octree: %s"),
+			!ChunkManager ? TEXT("ChunkManager not initialized") : TEXT("Octree optimization disabled"));
+		return;
+	}
+	
+	double StartTime = FPlatformTime::Seconds();
+	
+	ChunkManager->OptimizeOctree();
+	
+	double OptimizationTime = (FPlatformTime::Seconds() - StartTime) * 1000.0;
+	
+	UE_LOG(LogTemp, Warning, TEXT("Octree optimization completed in %.2f ms"), OptimizationTime);
+	UE_LOG(LogTemp, Log, TEXT("%s"), *ChunkManager->GetOctreeStats());
+}
+
+int32 AVoxelFluidActor::GetOctreeNodeCount() const
+{
+	if (!ChunkManager || !bUseOctreeOptimization)
+		return 0;
+	
+	// Parse the node count from the stats string
+	FString Stats = ChunkManager->GetOctreeStats();
+	
+	// Look for "Nodes=" in the stats string
+	int32 NodeCount = 0;
+	FString NodesStr;
+	if (Stats.Split(TEXT("Nodes="), nullptr, &NodesStr))
+	{
+		FString NodeCountStr;
+		if (NodesStr.Split(TEXT(","), &NodeCountStr, nullptr))
+		{
+			NodeCount = FCString::Atoi(*NodeCountStr);
+		}
+		else
+		{
+			// If no comma, use the entire string
+			NodeCount = FCString::Atoi(*NodesStr);
+		}
+	}
+	
+	return NodeCount;
+}
+
+void AVoxelFluidActor::TestOctreeVisualization()
+{
+	UE_LOG(LogTemp, Warning, TEXT("=== OCTREE VISUALIZATION TEST ==="));
+	
+	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("ChunkManager is NULL!"));
+		return;
+	}
+	
+	// Force enable everything
+	bUseOctreeOptimization = true;
+	bShowOctreeDebug = true;
+	bShowChunkBorders = true; // Also enable chunk borders for context
+	OctreeDebugDrawDistance = 10000.0f;
+	
+	// Apply settings
+	ChunkManager->bUseOctree = true;
+	ChunkManager->bDrawOctreeDebug = true;
+	ChunkManager->bShowChunkBorders = true;
+	ChunkManager->OctreeDebugDrawDistance = 10000.0f;
+	
+	// Enable octree
+	ChunkManager->EnableOctreeOptimization(true);
+	
+	UE_LOG(LogTemp, Warning, TEXT("Settings applied:"));
+	UE_LOG(LogTemp, Warning, TEXT("  bUseOctreeOptimization: %s"), bUseOctreeOptimization ? TEXT("TRUE") : TEXT("FALSE"));
+	UE_LOG(LogTemp, Warning, TEXT("  bShowOctreeDebug: %s"), bShowOctreeDebug ? TEXT("TRUE") : TEXT("FALSE"));
+	UE_LOG(LogTemp, Warning, TEXT("  bShowChunkBorders: %s"), bShowChunkBorders ? TEXT("TRUE") : TEXT("FALSE"));
+	UE_LOG(LogTemp, Warning, TEXT("  OctreeDebugDrawDistance: %.0f"), OctreeDebugDrawDistance);
+	
+	// Get current stats
+	FString Stats = GetOctreePerformanceStats();
+	UE_LOG(LogTemp, Warning, TEXT("Current Stats:\n%s"), *Stats);
+	
+	// Test force draw
+	ForceDrawOctreeDebug();
+	
+	UE_LOG(LogTemp, Warning, TEXT("Octree visualization enabled! You should now see:"));
+	UE_LOG(LogTemp, Warning, TEXT("- Blue sphere at your camera position"));
+	UE_LOG(LogTemp, Warning, TEXT("- Red sphere at VoxelFluidActor location"));
+	UE_LOG(LogTemp, Warning, TEXT("- Magenta box showing octree root bounds"));
+	UE_LOG(LogTemp, Warning, TEXT("- Cyan line connecting camera to octree center"));
+	UE_LOG(LogTemp, Warning, TEXT("- Various colored boxes showing octree nodes"));
+	UE_LOG(LogTemp, Warning, TEXT("================================"));
+}
+
+void AVoxelFluidActor::ForceDrawOctreeDebug()
+{
+	UE_LOG(LogTemp, Warning, TEXT("=== FORCE DRAW OCTREE DEBUG ==="));
+	
+	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("ChunkManager is NULL!"));
+		return;
+	}
+	
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		UE_LOG(LogTemp, Error, TEXT("World is NULL!"));
+		return;
+	}
+	
+	// Force draw directly
+	ChunkManager->DrawDebugChunks(World);
+	
+	// Also draw some basic debug shapes at actor location
+	FVector ActorLoc = GetActorLocation();
+	DrawDebugSphere(World, ActorLoc, 100.0f, 12, FColor::Red, false, 5.0f, 0, 10.0f);
+	DrawDebugString(World, ActorLoc + FVector(0, 0, 150), TEXT("VoxelFluidActor"), nullptr, FColor::White, 5.0f, true, 2.0f);
+	
+	// Draw actor bounds for reference
+	FVector BoundsMin = ActorLoc + SimulationBoundsOffset - SimulationBoundsExtent;
+	FVector BoundsMax = ActorLoc + SimulationBoundsOffset + SimulationBoundsExtent;
+	DrawDebugBox(World, ActorLoc + SimulationBoundsOffset, SimulationBoundsExtent, FColor::Green, false, 5.0f, 0, 2.0f);
+	DrawDebugString(World, ActorLoc + FVector(0, 0, 300), TEXT("Simulation Bounds"), nullptr, FColor::Green, 5.0f, true, 1.5f);
+	
+	UE_LOG(LogTemp, Warning, TEXT("Forced debug draw at actor location: %s"), *ActorLoc.ToString());
+	UE_LOG(LogTemp, Warning, TEXT("=============================="));
+}
+
+void AVoxelFluidActor::CreateTestFluidCluster()
+{
+	UE_LOG(LogTemp, Warning, TEXT("=== CREATING TEST FLUID CLUSTER ==="));
+	
+	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("ChunkManager is NULL!"));
+		return;
+	}
+	
+	// Create a dense cluster of fluid near the actor to force octree subdivisions
+	FVector ActorPos = GetActorLocation();
+	float ChunkWorldSize = ChunkSize * CellSize; // Typically 32 * 100 = 3200
+	
+	int32 FluidClustersCreated = 0;
+	
+	// Create a 4x4 grid of fluid sources in a small area to force subdivision
+	for (int32 X = -2; X <= 2; X++)
+	{
+		for (int32 Y = -2; Y <= 2; Y++)
+		{
+			for (int32 Z = 0; Z <= 1; Z++) // Just 2 levels high
+			{
+				FVector FluidPos = ActorPos + FVector(
+					X * (ChunkWorldSize * 0.3f), // 30% of chunk size spacing
+					Y * (ChunkWorldSize * 0.3f),
+					Z * (ChunkWorldSize * 0.3f)
+				);
+				
+				// Add fluid at this location
+				AddFluidAtLocation(FluidPos, 5.0f);
+				FluidClustersCreated++;
+			}
+		}
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("Created %d fluid clusters near actor"), FluidClustersCreated);
+	UE_LOG(LogTemp, Warning, TEXT("Actor position: %s"), *ActorPos.ToString());
+	UE_LOG(LogTemp, Warning, TEXT("Chunk world size: %.0f"), ChunkWorldSize);
+	UE_LOG(LogTemp, Warning, TEXT("Cluster spacing: %.0f"), ChunkWorldSize * 0.3f);
+	
+	// Force octree update
+	if (ChunkManager->IsOctreeValid())
+	{
+		ChunkManager->OptimizeOctree();
+		FString Stats = ChunkManager->GetOctreeStats();
+		UE_LOG(LogTemp, Warning, TEXT("Updated octree stats: %s"), *Stats);
+	}
+	
+	// Force visualization update
+	ForceDrawOctreeDebug();
+	
+	UE_LOG(LogTemp, Warning, TEXT("==================================="));
+}
+
+void AVoxelFluidActor::CreateWideHorizontalFluidPattern()
+{
+	UE_LOG(LogTemp, Warning, TEXT("=== CREATING WIDE HORIZONTAL FLUID PATTERN ==="));
+	
+	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("ChunkManager is NULL!"));
+		return;
+	}
+	
+	FVector ActorPos = GetActorLocation();
+	float ChunkWorldSize = ChunkSize * CellSize; // 3200 units typically
+	
+	int32 FluidSourcesCreated = 0;
+	int32 GridSize = 10; // 10x10 grid for wide coverage
+	
+	// Create a wide horizontal grid of fluid sources
+	for (int32 X = -GridSize; X <= GridSize; X++)
+	{
+		for (int32 Y = -GridSize; Y <= GridSize; Y++)
+		{
+			// Skip center area to create an interesting pattern
+			if (FMath::Abs(X) < 2 && FMath::Abs(Y) < 2)
+				continue;
+			
+			FVector FluidPos = ActorPos + FVector(
+				X * ChunkWorldSize * 1.5f, // 1.5 chunk spacing for wide spread
+				Y * ChunkWorldSize * 1.5f,
+				0.0f // Keep at ground level
+			);
+			
+			// Add some variation in height
+			FluidPos.Z += FMath::RandRange(-200.0f, 200.0f);
+			
+			// Add fluid source (permanent)
+			AddFluidSource(FluidPos, 2.0f);
+			FluidSourcesCreated++;
+		}
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("Created %d fluid sources in wide horizontal pattern"), FluidSourcesCreated);
+	UE_LOG(LogTemp, Warning, TEXT("Grid covers area: %.0f x %.0f units"), 
+		GridSize * 2 * ChunkWorldSize * 1.5f, GridSize * 2 * ChunkWorldSize * 1.5f);
+	UE_LOG(LogTemp, Warning, TEXT("Each chunk is %.0f units"), ChunkWorldSize);
+	
+	// Update chunk streaming to handle the new area
+	if (ChunkManager)
+	{
+		ChunkManager->ForceUpdateChunkStates();
+		
+		// Wait a moment then update octree
+		FTimerHandle TimerHandle;
+		GetWorld()->GetTimerManager().SetTimer(TimerHandle, [this]()
+		{
+			if (ChunkManager->IsOctreeValid())
+			{
+				ChunkManager->OptimizeOctree();
+				FString Stats = ChunkManager->GetOctreeStats();
+				UE_LOG(LogTemp, Warning, TEXT("Updated octree after wide pattern: %s"), *Stats);
+			}
+		}, 2.0f, false);
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("Wide horizontal pattern created! Chunks should load around fluid sources."));
+	UE_LOG(LogTemp, Warning, TEXT("================================================"));
+}
+
+void AVoxelFluidActor::ExpandSimulationBounds()
+{
+	UE_LOG(LogTemp, Warning, TEXT("=== EXPANDING SIMULATION BOUNDS ==="));
+	
+	// Expand simulation bounds
+	SimulationBoundsExtent = FVector(51200.0f, 51200.0f, 6400.0f); // Very large bounds
+	
+	// Update chunk streaming distances
+	ChunkLoadDistance = 30000.0f;
+	ChunkActiveDistance = 20000.0f;
+	MaxActiveChunks = 500;
+	MaxLoadedChunks = 1000;
+	
+	// Update octree debug distance
+	OctreeDebugDrawDistance = 15000.0f;
+	
+	// Reinitialize chunk system with new bounds
+	if (ChunkManager)
+	{
+		InitializeChunkSystem();
+		
+		// Apply new settings
+		ChunkManager->bUseOctree = bUseOctreeOptimization;
+		ChunkManager->bDrawOctreeDebug = bShowOctreeDebug;
+		ChunkManager->OctreeDebugDrawDistance = OctreeDebugDrawDistance;
+		
+		if (bUseOctreeOptimization)
+		{
+			ChunkManager->EnableOctreeOptimization(true);
+		}
+	}
+	
+	// Update bounds component
+	if (BoundsComponent)
+	{
+		BoundsComponent->SetBoxExtent(SimulationBoundsExtent);
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("Expanded simulation bounds to: %s"), *SimulationBoundsExtent.ToString());
+	UE_LOG(LogTemp, Warning, TEXT("New chunk load distance: %.0f"), ChunkLoadDistance);
+	UE_LOG(LogTemp, Warning, TEXT("New max chunks: %d active, %d loaded"), MaxActiveChunks, MaxLoadedChunks);
+	UE_LOG(LogTemp, Warning, TEXT("==================================="));
 }

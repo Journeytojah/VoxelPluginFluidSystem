@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "FluidChunk.h"
 #include "Engine/World.h"
+#include "Optimization/FluidOctree.h"
 #include "FluidChunkManager.generated.h"
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnChunkLoaded, const FFluidChunkCoord&);
@@ -131,6 +132,12 @@ public:
 	
 	FChunkManagerStats GetStats() const;
 	
+	UFUNCTION(BlueprintCallable, Category = "Chunk System")
+	int32 GetLoadedChunkCount() const { return LoadedChunks.Num(); }
+	
+	UFUNCTION(BlueprintCallable, Category = "Chunk System")
+	int32 GetActiveChunkCount() const { return ActiveChunkCoords.Num(); }
+	
 	void SetStreamingConfig(const FChunkStreamingConfig& NewConfig);
 	const FChunkStreamingConfig& GetStreamingConfig() const { return StreamingConfig; }
 	
@@ -220,6 +227,34 @@ public:
 	// Enable memory compression for fluid cells
 	void EnableCompressedMode(bool bEnable);
 	
+	// Octree optimization methods
+	UFUNCTION(BlueprintCallable, Category = "Optimization")
+	void EnableOctreeOptimization(bool bEnable);
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization")
+	bool IsOctreeEnabled() const { return bUseOctree; }
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization")
+	FString GetOctreeStats() const;
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization")
+	void OptimizeOctree();
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization")
+	TArray<UFluidChunk*> QueryChunksInFrustum(const FMatrix& ViewProjectionMatrix, float MaxDistance);
+	
+	UFUNCTION(BlueprintCallable, Category = "Optimization")
+	bool IsOctreeValid() const { return FluidOctree != nullptr; }
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Octree")
+	bool bUseOctree = true;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Octree")
+	bool bDrawOctreeDebug = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Octree", meta = (ClampMin = "1000.0", ClampMax = "10000.0"))
+	float OctreeDebugDrawDistance = 5000.0f;
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bShowChunkBorders = false;
 	
@@ -267,6 +302,10 @@ protected:
 	
 	// Static water manager reference
 	class UStaticWaterManager* StaticWaterManager = nullptr;
+	
+	// Octree for spatial optimization
+	UPROPERTY()
+	UFluidOctree* FluidOctree = nullptr;
 	
 	// Statistics tracking
 	int32 ChunksSavedThisFrame = 0;
