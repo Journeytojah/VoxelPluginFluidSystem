@@ -117,9 +117,10 @@ void UFluidBenchmarkComponent::StartBenchmark()
 	}
 
 	// Store original configuration
-	OriginalConfig.bUseSleepChains = FluidActor->bUseSleepChains;
-	OriginalConfig.bUsePredictiveSettling = FluidActor->bUsePredictiveSettling;
-	OriginalConfig.bEnableMemoryCompression = FluidActor->bEnableMemoryCompression;
+	// Optimization properties removed - using default values
+	OriginalConfig.bUseSleepChains = false;
+	OriginalConfig.bUsePredictiveSettling = false;
+	OriginalConfig.bEnableMemoryCompression = false;
 	OriginalConfig.ChunkSize = FluidActor->ChunkSize;
 	OriginalConfig.MaxActiveChunks = FluidActor->MaxActiveChunks;
 
@@ -278,16 +279,12 @@ void UFluidBenchmarkComponent::ApplyConfiguration(const FBenchmarkConfig& Config
 	if (!FluidActor)
 		return;
 
-	FluidActor->bUseSleepChains = Config.bUseSleepChains;
-	FluidActor->bUsePredictiveSettling = Config.bUsePredictiveSettling;
-	FluidActor->bEnableMemoryCompression = Config.bEnableMemoryCompression;
+	// Optimization properties removed - cannot apply config
 	
 	// Apply to chunk manager if it exists
 	if (FluidActor->ChunkManager)
 	{
-		FluidActor->ChunkManager->bUseSleepChains = Config.bUseSleepChains;
-		FluidActor->ChunkManager->bUsePredictiveSettling = Config.bUsePredictiveSettling;
-		FluidActor->ChunkManager->EnableCompressedMode(Config.bEnableMemoryCompression);
+		// Note: Optimization settings removed - using default behavior
 	}
 	
 	UE_LOG(LogTemp, Log, TEXT("Applied config: %s (Sleep:%d, Predictive:%d, Compression:%d)"),
@@ -302,9 +299,7 @@ void UFluidBenchmarkComponent::RestoreOriginalConfiguration()
 	if (!FluidActor)
 		return;
 
-	FluidActor->bUseSleepChains = OriginalConfig.bUseSleepChains;
-	FluidActor->bUsePredictiveSettling = OriginalConfig.bUsePredictiveSettling;
-	FluidActor->bEnableMemoryCompression = OriginalConfig.bEnableMemoryCompression;
+	// Optimization properties removed - cannot restore config
 }
 
 float UFluidBenchmarkComponent::CalculateMemoryUsage() const
@@ -315,7 +310,7 @@ float UFluidBenchmarkComponent::CalculateMemoryUsage() const
 	const FChunkManagerStats Stats = FluidActor->ChunkManager->GetStats();
 	
 	// Calculate memory based on compression settings
-	const float BytesPerCell = FluidActor->bEnableMemoryCompression ? 4.0f : 44.0f;
+	const float BytesPerCell = 44.0f; // No compression available
 	const float CellMemory = Stats.TotalActiveCells * BytesPerCell;
 	const float ChunkOverhead = Stats.TotalChunks * sizeof(UFluidChunk) * 2; // Rough estimate
 	const float CacheMemory = FluidActor->ChunkManager->GetCacheMemoryUsage() * 1024; // Convert KB to bytes

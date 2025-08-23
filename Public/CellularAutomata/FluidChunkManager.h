@@ -3,7 +3,6 @@
 #include "CoreMinimal.h"
 #include "FluidChunk.h"
 #include "Engine/World.h"
-#include "Optimization/FluidOctree.h"
 #include "FluidChunkManager.generated.h"
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnChunkLoaded, const FFluidChunkCoord&);
@@ -15,13 +14,13 @@ struct VOXELFLUIDSYSTEM_API FChunkStreamingConfig
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Streaming")
-	float ActiveDistance = 6000.0f;
+	float ActiveDistance = 8000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Streaming")
-	float LoadDistance = 10000.0f;
+	float LoadDistance = 15000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Streaming")
-	float UnloadDistance = 12000.0f;
+	float UnloadDistance = 20000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Streaming")
 	int32 MaxActiveChunks = 80;
@@ -127,6 +126,7 @@ public:
 	void ClearAllChunks();
 	
 	TArray<UFluidChunk*> GetActiveChunks() const;
+	TArray<UFluidChunk*> GetVisibleChunks() const; // Only chunks that should be rendered
 	TArray<UFluidChunk*> GetChunksInRadius(const FVector& Center, float Radius) const;
 	TArray<FFluidChunkCoord> GetChunksInBounds(const FBox& Bounds) const;
 	
@@ -142,6 +142,7 @@ public:
 	const FChunkStreamingConfig& GetStreamingConfig() const { return StreamingConfig; }
 	
 	void ForceUpdateChunkStates();
+	
 	
 	void EnableChunkDebugVisualization(bool bEnable);
 	
@@ -202,58 +203,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float EvaporationRate = 0.0f;
 	
-	// Optimization settings
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
-	bool bUseSleepChains = true;
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
-	bool bUseSparseGrid = false;
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization", meta = (ClampMin = "0.1", ClampMax = "0.5"))
-	float SparseGridThreshold = 0.3f;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
-	bool bUsePredictiveSettling = true;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
-	bool bUseOptimizedParallelProcessing = true;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
-	float SleepChainMergeDistance = 3.0f;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization")
-	float PredictiveSettlingConfidenceThreshold = 0.95f;
-	
-	// Enable memory compression for fluid cells
-	void EnableCompressedMode(bool bEnable);
-	
-	// Octree optimization methods
-	UFUNCTION(BlueprintCallable, Category = "Optimization")
-	void EnableOctreeOptimization(bool bEnable);
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization")
-	bool IsOctreeEnabled() const { return bUseOctree; }
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization")
-	FString GetOctreeStats() const;
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization")
-	void OptimizeOctree();
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization")
-	TArray<UFluidChunk*> QueryChunksInFrustum(const FMatrix& ViewProjectionMatrix, float MaxDistance);
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization")
-	bool IsOctreeValid() const { return FluidOctree != nullptr; }
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Octree")
-	bool bUseOctree = true;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Octree")
-	bool bDrawOctreeDebug = false;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Octree", meta = (ClampMin = "1000.0", ClampMax = "10000.0"))
-	float OctreeDebugDrawDistance = 5000.0f;
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bShowChunkBorders = false;
@@ -303,9 +254,7 @@ protected:
 	// Static water manager reference
 	class UStaticWaterManager* StaticWaterManager = nullptr;
 	
-	// Octree for spatial optimization
-	UPROPERTY()
-	UFluidOctree* FluidOctree = nullptr;
+	
 	
 	// Statistics tracking
 	int32 ChunksSavedThisFrame = 0;
@@ -321,6 +270,7 @@ protected:
 	
 	void UpdateChunkStates(const TArray<FVector>& ViewerPositions);
 	void UpdateChunkLODs(const TArray<FVector>& ViewerPositions);
+	
 	
 	void SynchronizeChunkBorders();
 	void SynchronizeChunkBorderTerrain();

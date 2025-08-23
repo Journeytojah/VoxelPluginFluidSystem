@@ -186,7 +186,7 @@ void AVoxelFluidActor::Tick(float DeltaTime)
 		LastFrameSimulationTime = (FPlatformTime::Seconds() - StartTime) * 1000.0f; // Convert to ms
 	}
 	
-	if (bShowFlowVectors || bShowOctreeDebug || bShowChunkBorders || bShowChunkStates)
+	if (bShowFlowVectors || bShowChunkBorders || bShowChunkStates)
 	{
 		UpdateDebugVisualization();
 	}
@@ -544,9 +544,7 @@ void AVoxelFluidActor::UpdateDebugVisualization()
 		ChunkManager->bShowChunkStates = bShowChunkStates;
 		ChunkManager->DebugUpdateInterval = ChunkDebugUpdateInterval;
 		
-		// Update octree debug settings
-		ChunkManager->bDrawOctreeDebug = bShowOctreeDebug;
-		ChunkManager->OctreeDebugDrawDistance = OctreeDebugDrawDistance;
+		// Octree debug settings removed
 		
 		if (ChunkManager->ShouldUpdateDebugVisualization())
 		{
@@ -665,6 +663,7 @@ float AVoxelFluidActor::GetTotalFluidVolume() const
 	return 0.0f;
 }
 
+
 void AVoxelFluidActor::InitializeChunkSystem()
 {
 	if (!ChunkManager)
@@ -693,31 +692,9 @@ void AVoxelFluidActor::InitializeChunkSystem()
 	ChunkManager->Gravity = GravityStrength;
 	ChunkManager->EvaporationRate = FluidEvaporationRate;
 	
-	// Apply optimization settings to chunk manager
-	ChunkManager->bUseSleepChains = bUseSleepChains;
-	ChunkManager->bUsePredictiveSettling = bUsePredictiveSettling;
-	ChunkManager->SleepChainMergeDistance = SleepChainMergeDistance;
-	ChunkManager->PredictiveSettlingConfidenceThreshold = PredictiveSettlingConfidenceThreshold;
+	// Optimization settings removed - using default behavior
 	
-	// Apply sparse grid settings
-	ChunkManager->bUseSparseGrid = bUseSparseGrid;
-	ChunkManager->SparseGridThreshold = SparseGridThreshold;
-	
-	// Configure octree optimization
-	ChunkManager->bUseOctree = bUseOctreeOptimization;
-	ChunkManager->bDrawOctreeDebug = bShowOctreeDebug;
-	ChunkManager->OctreeDebugDrawDistance = OctreeDebugDrawDistance;
-	
-	if (bUseOctreeOptimization)
-	{
-		ChunkManager->EnableOctreeOptimization(true);
-	}
-	
-	// Apply memory compression if enabled
-	if (bEnableMemoryCompression)
-	{
-		ChunkManager->EnableCompressedMode(true);
-	}
+	// Memory compression removed
 	
 	// Sync debug settings
 	ChunkManager->bShowChunkBorders = bShowChunkBorders;
@@ -733,22 +710,6 @@ void AVoxelFluidActor::UpdateChunkSystem(float DeltaTime)
 		return;
 	
 	TArray<FVector> ViewerPositions = GetViewerPositions();
-	
-	// Log viewer position periodically for debugging
-	static float LogTimer = 0.0f;
-	LogTimer += DeltaTime;
-	if (LogTimer > 2.0f) // Log every 2 seconds
-	{
-		LogTimer = 0.0f;
-		if (ViewerPositions.Num() > 0)
-		{
-			UE_LOG(LogTemp, Log, TEXT("Viewer at: %s"), *ViewerPositions[0].ToString());
-		}
-		else
-		{
-			UE_LOG(LogTemp, Warning, TEXT("No viewer positions available for chunk streaming!"));
-		}
-	}
 	
 	ChunkManager->UpdateChunks(DeltaTime, ViewerPositions);
 	
@@ -949,26 +910,10 @@ void AVoxelFluidActor::ShowCacheStatus()
 	       ChunkManager->StreamingConfig.CacheExpirationTime);
 }
 
-void AVoxelFluidActor::ToggleMemoryCompression()
-{
-	bEnableMemoryCompression = !bEnableMemoryCompression;
-	
-	if (ChunkManager)
-	{
-		ChunkManager->EnableCompressedMode(bEnableMemoryCompression);
-		
-		UE_LOG(LogTemp, Warning, TEXT("Memory compression %s"), 
-			bEnableMemoryCompression ? TEXT("ENABLED") : TEXT("DISABLED"));
-		
-		// Display memory stats after toggling
-		UE_LOG(LogTemp, Warning, TEXT("%s"), *GetMemoryUsageStats());
-	}
-	else
-	{
-		UE_LOG(LogTemp, Error, TEXT("ChunkManager not initialized"));
-	}
-}
+// OPTIMIZATION REMOVED: ToggleMemoryCompression (removed)
 
+// OPTIMIZATION REMOVED: GetMemoryUsageStats
+/*
 FString AVoxelFluidActor::GetMemoryUsageStats() const
 {
 	if (!ChunkManager)
@@ -1038,7 +983,7 @@ FString AVoxelFluidActor::GetMemoryUsageStats() const
 		SavingsMB,
 		(1.0f - CompressionRatio) * 100.0f,
 		UncompressedMemoryMB > 0 ? (UncompressedMemoryMB / CompressedMemoryMB) : 0.0f,
-		bUseSparseGrid ? TEXT("ENABLED") : TEXT("DISABLED"),
+		TEXT("REMOVED"),
 		SparseChunkCount, SparseChunkCount + DenseChunkCount,
 		(SparseChunkCount + DenseChunkCount) > 0 ? (100.0f * SparseChunkCount / (SparseChunkCount + DenseChunkCount)) : 0.0f,
 		AvgSparseRatio,
@@ -1046,7 +991,10 @@ FString AVoxelFluidActor::GetMemoryUsageStats() const
 		SavingsMB + SparseMemorySavings
 	);
 }
+*/
 
+// OPTIMIZATION REMOVED: TestSparseGridPerformance
+/*
 void AVoxelFluidActor::TestSparseGridPerformance()
 {
 	if (!ChunkManager)
@@ -1145,7 +1093,7 @@ void AVoxelFluidActor::TestSparseGridPerformance()
 	
 	const bool OriginalSparseState = bUseSparseGrid;
 	bUseSparseGrid = !bUseSparseGrid;
-	ChunkManager->bUseSparseGrid = bUseSparseGrid;
+	// bUseSparseGrid property removed
 	
 	// Force all chunks to update representation
 	for (UFluidChunk* Chunk : ActiveChunks)
@@ -1183,10 +1131,11 @@ void AVoxelFluidActor::TestSparseGridPerformance()
 	
 	// Restore original state
 	bUseSparseGrid = OriginalSparseState;
-	ChunkManager->bUseSparseGrid = bUseSparseGrid;
+	// bUseSparseGrid property removed
 	
 	UE_LOG(LogTemp, Warning, TEXT("=== TEST COMPLETE ==="));
 }
+*/
 
 void AVoxelFluidActor::TestPersistenceWithSourcePause()
 {
@@ -1777,16 +1726,18 @@ void AVoxelFluidActor::TestTerrainRefreshAtLocation(const FVector& Location, flo
 	RefillStaticWaterInRadius(Location, Radius);
 }
 
+// OPTIMIZATION REMOVED: ToggleOctreeOptimization
+/*
 void AVoxelFluidActor::ToggleOctreeOptimization()
 {
 	bUseOctreeOptimization = !bUseOctreeOptimization;
 	
 	if (ChunkManager)
 	{
-		ChunkManager->EnableOctreeOptimization(bUseOctreeOptimization);
-		ChunkManager->bUseOctree = bUseOctreeOptimization;
-		ChunkManager->bDrawOctreeDebug = bShowOctreeDebug;
-		ChunkManager->OctreeDebugDrawDistance = OctreeDebugDrawDistance;
+		// Octree optimization removed
+		// bUseOctree property removed
+		// bDrawOctreeDebug property removed
+		// OctreeDebugDrawDistance property removed
 		
 		UE_LOG(LogTemp, Warning, TEXT("========================================"));
 		UE_LOG(LogTemp, Warning, TEXT("Octree optimization %s"), 
@@ -1794,8 +1745,8 @@ void AVoxelFluidActor::ToggleOctreeOptimization()
 		
 		if (bUseOctreeOptimization)
 		{
-			FString Stats = ChunkManager->GetOctreeStats();
-			UE_LOG(LogTemp, Warning, TEXT("Octree Stats: %s"), *Stats);
+			// Octree stats removed
+			// Octree stats removed
 			
 			// Additional diagnostics
 			UE_LOG(LogTemp, Warning, TEXT("Debug Draw Enabled: %s"), bShowOctreeDebug ? TEXT("YES") : TEXT("NO"));
@@ -1810,7 +1761,10 @@ void AVoxelFluidActor::ToggleOctreeOptimization()
 		UE_LOG(LogTemp, Error, TEXT("ChunkManager is NULL!"));
 	}
 }
+*/
 
+// OPTIMIZATION REMOVED: GetOctreePerformanceStats
+/*
 FString AVoxelFluidActor::GetOctreePerformanceStats() const
 {
 	if (!ChunkManager)
@@ -1823,7 +1777,7 @@ FString AVoxelFluidActor::GetOctreePerformanceStats() const
 	
 	if (bUseOctreeOptimization)
 	{
-		Stats += ChunkManager->GetOctreeStats() + TEXT("\n");
+		// Octree stats removed
 		
 		// Add performance comparison
 		int32 TotalChunks = ChunkManager->GetLoadedChunkCount();
@@ -1845,7 +1799,10 @@ FString AVoxelFluidActor::GetOctreePerformanceStats() const
 	
 	return Stats;
 }
+*/
 
+// OPTIMIZATION REMOVED: OptimizeOctreeStructure
+/*
 void AVoxelFluidActor::OptimizeOctreeStructure()
 {
 	if (!ChunkManager || !bUseOctreeOptimization)
@@ -1857,26 +1814,29 @@ void AVoxelFluidActor::OptimizeOctreeStructure()
 	
 	double StartTime = FPlatformTime::Seconds();
 	
-	ChunkManager->OptimizeOctree();
+	// Octree optimization removed
 	
 	double OptimizationTime = (FPlatformTime::Seconds() - StartTime) * 1000.0;
 	
 	UE_LOG(LogTemp, Warning, TEXT("Octree optimization completed in %.2f ms"), OptimizationTime);
-	UE_LOG(LogTemp, Log, TEXT("%s"), *ChunkManager->GetOctreeStats());
+	// Octree stats removed
 }
+*/
 
+// OPTIMIZATION REMOVED: GetOctreeNodeCount
+/*
 int32 AVoxelFluidActor::GetOctreeNodeCount() const
 {
 	if (!ChunkManager || !bUseOctreeOptimization)
 		return 0;
 	
 	// Parse the node count from the stats string
-	FString Stats = ChunkManager->GetOctreeStats();
+	// Octree stats removed
 	
 	// Look for "Nodes=" in the stats string
 	int32 NodeCount = 0;
 	FString NodesStr;
-	if (Stats.Split(TEXT("Nodes="), nullptr, &NodesStr))
+	if (false) // Stats parsing removed
 	{
 		FString NodeCountStr;
 		if (NodesStr.Split(TEXT(","), &NodeCountStr, nullptr))
@@ -1892,7 +1852,10 @@ int32 AVoxelFluidActor::GetOctreeNodeCount() const
 	
 	return NodeCount;
 }
+*/
 
+// OPTIMIZATION REMOVED: TestOctreeVisualization
+/*
 void AVoxelFluidActor::TestOctreeVisualization()
 {
 	UE_LOG(LogTemp, Warning, TEXT("=== OCTREE VISUALIZATION TEST ==="));
@@ -1910,13 +1873,13 @@ void AVoxelFluidActor::TestOctreeVisualization()
 	OctreeDebugDrawDistance = 10000.0f;
 	
 	// Apply settings
-	ChunkManager->bUseOctree = true;
-	ChunkManager->bDrawOctreeDebug = true;
+	// bUseOctree property removed
+	// bDrawOctreeDebug property removed
 	ChunkManager->bShowChunkBorders = true;
-	ChunkManager->OctreeDebugDrawDistance = 10000.0f;
+	// OctreeDebugDrawDistance property removed
 	
 	// Enable octree
-	ChunkManager->EnableOctreeOptimization(true);
+	// EnableOctreeOptimization method removed
 	
 	UE_LOG(LogTemp, Warning, TEXT("Settings applied:"));
 	UE_LOG(LogTemp, Warning, TEXT("  bUseOctreeOptimization: %s"), bUseOctreeOptimization ? TEXT("TRUE") : TEXT("FALSE"));
@@ -1939,7 +1902,10 @@ void AVoxelFluidActor::TestOctreeVisualization()
 	UE_LOG(LogTemp, Warning, TEXT("- Various colored boxes showing octree nodes"));
 	UE_LOG(LogTemp, Warning, TEXT("================================"));
 }
+*/
 
+// OPTIMIZATION REMOVED: ForceDrawOctreeDebug
+/*
 void AVoxelFluidActor::ForceDrawOctreeDebug()
 {
 	UE_LOG(LogTemp, Warning, TEXT("=== FORCE DRAW OCTREE DEBUG ==="));
@@ -1974,7 +1940,10 @@ void AVoxelFluidActor::ForceDrawOctreeDebug()
 	UE_LOG(LogTemp, Warning, TEXT("Forced debug draw at actor location: %s"), *ActorLoc.ToString());
 	UE_LOG(LogTemp, Warning, TEXT("=============================="));
 }
+*/
 
+// OPTIMIZATION REMOVED: CreateTestFluidCluster
+/*
 void AVoxelFluidActor::CreateTestFluidCluster()
 {
 	UE_LOG(LogTemp, Warning, TEXT("=== CREATING TEST FLUID CLUSTER ==="));
@@ -2017,11 +1986,11 @@ void AVoxelFluidActor::CreateTestFluidCluster()
 	UE_LOG(LogTemp, Warning, TEXT("Cluster spacing: %.0f"), ChunkWorldSize * 0.3f);
 	
 	// Force octree update
-	if (ChunkManager->IsOctreeValid())
+	if (false) // IsOctreeValid removed
 	{
-		ChunkManager->OptimizeOctree();
-		FString Stats = ChunkManager->GetOctreeStats();
-		UE_LOG(LogTemp, Warning, TEXT("Updated octree stats: %s"), *Stats);
+		// Octree optimization removed
+		// Octree stats removed
+		// Octree stats removed
 	}
 	
 	// Force visualization update
@@ -2029,7 +1998,10 @@ void AVoxelFluidActor::CreateTestFluidCluster()
 	
 	UE_LOG(LogTemp, Warning, TEXT("==================================="));
 }
+*/
 
+// OPTIMIZATION REMOVED: CreateWideHorizontalFluidPattern
+/*
 void AVoxelFluidActor::CreateWideHorizontalFluidPattern()
 {
 	UE_LOG(LogTemp, Warning, TEXT("=== CREATING WIDE HORIZONTAL FLUID PATTERN ==="));
@@ -2084,11 +2056,11 @@ void AVoxelFluidActor::CreateWideHorizontalFluidPattern()
 		FTimerHandle TimerHandle;
 		GetWorld()->GetTimerManager().SetTimer(TimerHandle, [this]()
 		{
-			if (ChunkManager->IsOctreeValid())
+			if (false) // IsOctreeValid removed
 			{
-				ChunkManager->OptimizeOctree();
-				FString Stats = ChunkManager->GetOctreeStats();
-				UE_LOG(LogTemp, Warning, TEXT("Updated octree after wide pattern: %s"), *Stats);
+				// Octree optimization removed
+				// Octree stats removed
+				// Octree stats removed
 			}
 		}, 2.0f, false);
 	}
@@ -2096,7 +2068,10 @@ void AVoxelFluidActor::CreateWideHorizontalFluidPattern()
 	UE_LOG(LogTemp, Warning, TEXT("Wide horizontal pattern created! Chunks should load around fluid sources."));
 	UE_LOG(LogTemp, Warning, TEXT("================================================"));
 }
+*/
 
+// OPTIMIZATION REMOVED: ExpandSimulationBounds
+/*
 void AVoxelFluidActor::ExpandSimulationBounds()
 {
 	UE_LOG(LogTemp, Warning, TEXT("=== EXPANDING SIMULATION BOUNDS ==="));
@@ -2119,13 +2094,13 @@ void AVoxelFluidActor::ExpandSimulationBounds()
 		InitializeChunkSystem();
 		
 		// Apply new settings
-		ChunkManager->bUseOctree = bUseOctreeOptimization;
-		ChunkManager->bDrawOctreeDebug = bShowOctreeDebug;
-		ChunkManager->OctreeDebugDrawDistance = OctreeDebugDrawDistance;
+		// bUseOctree property removed
+		// bDrawOctreeDebug property removed
+		// OctreeDebugDrawDistance property removed
 		
 		if (bUseOctreeOptimization)
 		{
-			ChunkManager->EnableOctreeOptimization(true);
+			// Octree optimization removed
 		}
 	}
 	
@@ -2139,4 +2114,4 @@ void AVoxelFluidActor::ExpandSimulationBounds()
 	UE_LOG(LogTemp, Warning, TEXT("New chunk load distance: %.0f"), ChunkLoadDistance);
 	UE_LOG(LogTemp, Warning, TEXT("New max chunks: %d active, %d loaded"), MaxActiveChunks, MaxLoadedChunks);
 	UE_LOG(LogTemp, Warning, TEXT("==================================="));
-}
+}*/

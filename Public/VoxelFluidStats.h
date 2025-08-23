@@ -134,3 +134,29 @@ DECLARE_FLOAT_COUNTER_STAT(TEXT("[TOP] Simulation %"), STAT_VoxelFluid_Simulatio
 DECLARE_FLOAT_COUNTER_STAT(TEXT("[TOP] Rendering %"), STAT_VoxelFluid_RenderingPercent, STATGROUP_VoxelFluid);
 DECLARE_FLOAT_COUNTER_STAT(TEXT("[TOP] Terrain %"), STAT_VoxelFluid_TerrainPercent, STATGROUP_VoxelFluid);
 DECLARE_FLOAT_COUNTER_STAT(TEXT("[TOP] Memory %"), STAT_VoxelFluid_MemoryPercent, STATGROUP_VoxelFluid);
+
+// =====================================================
+//  PERFORMANCE OPTIMIZATION METRICS
+// =====================================================
+
+// Frustum Culling & Performance States
+DECLARE_CYCLE_STAT(TEXT("Frustum Culling"), STAT_VoxelFluid_FrustumCulling, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("Performance Update"), STAT_VoxelFluid_PerformanceStateUpdate, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Culled Chunks"), STAT_VoxelFluid_CulledChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("In Frustum"), STAT_VoxelFluid_FrustumChunks, STATGROUP_VoxelFluid);
+
+// Static Water Optimization
+DECLARE_DWORD_COUNTER_STAT(TEXT("Static Water Chunks"), STAT_VoxelFluid_StaticWaterChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Hibernated Chunks"), STAT_VoxelFluid_HibernatedChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Low Priority"), STAT_VoxelFluid_LowPriorityChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Skipped Updates"), STAT_VoxelFluid_SkippedUpdates, STATGROUP_VoxelFluid);
+
+// Octree Optimization
+DECLARE_CYCLE_STAT(TEXT("Octree Query"), STAT_VoxelFluid_OctreeQuery, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("Octree Update"), STAT_VoxelFluid_OctreeUpdate, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Octree Nodes"), STAT_VoxelFluid_OctreeNodes, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("Octree Depth"), STAT_VoxelFluid_OctreeDepth, STATGROUP_VoxelFluid);
+
+// Performance Timing Savings
+DECLARE_FLOAT_COUNTER_STAT(TEXT("Time Saved MS"), STAT_VoxelFluid_TimeSavedMS, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("Optimization %"), STAT_VoxelFluid_OptimizationPercent, STATGROUP_VoxelFluid);

@@ -1,6 +1,5 @@
 #include "CellularAutomata/FluidChunkManager.h"
 #include "CellularAutomata/StaticWaterBody.h"
-#include "Optimization/FluidOctree.h"
 #include "VoxelFluidStats.h"
 #include "VoxelFluidDebug.h"
 #include "DrawDebugHelpers.h"
@@ -16,9 +15,9 @@ UFluidChunkManager::UFluidChunkManager()
 	WorldOrigin = FVector::ZeroVector;
 	WorldSize = FVector(100000.0f, 100000.0f, 10000.0f);
 	
-	StreamingConfig.ActiveDistance = 6000.0f;
-	StreamingConfig.LoadDistance = 10000.0f;
-	StreamingConfig.UnloadDistance = 12000.0f;
+	StreamingConfig.ActiveDistance = 8000.0f;
+	StreamingConfig.LoadDistance = 15000.0f;
+	StreamingConfig.UnloadDistance = 20000.0f;
 	StreamingConfig.MaxActiveChunks = 80;
 	StreamingConfig.MaxLoadedChunks = 160;
 	StreamingConfig.ChunkUpdateInterval = 0.1f;
@@ -60,28 +59,6 @@ void UFluidChunkManager::Initialize(int32 InChunkSize, float InCellSize, const F
 	ChunkUpdateTimer = 0.0f;
 	StatsUpdateTimer = 0.0f;
 	
-	// Initialize octree if enabled
-	if (bUseOctree)
-	{
-		if (!FluidOctree)
-		{
-			FluidOctree = NewObject<UFluidOctree>(this, UFluidOctree::StaticClass());
-		}
-		
-		if (FluidOctree)
-		{
-			FVector WorldCenter = WorldOrigin + WorldSize * 0.5f;
-			float MaxDimension = FMath::Max3(WorldSize.X, WorldSize.Y, WorldSize.Z);
-			// Expand octree bounds to handle chunks outside the initial world bounds
-			float ExpandedSize = MaxDimension * 2.0f; // Double the size to handle edge cases
-			FluidOctree->Initialize(WorldCenter, ExpandedSize);
-			UE_LOG(LogTemp, Warning, TEXT("FluidChunkManager: Octree initialized"));
-			UE_LOG(LogTemp, Warning, TEXT("  World Origin: %s"), *WorldOrigin.ToString());
-			UE_LOG(LogTemp, Warning, TEXT("  World Size: %s"), *WorldSize.ToString());
-			UE_LOG(LogTemp, Warning, TEXT("  World Center: %s"), *WorldCenter.ToString());
-			UE_LOG(LogTemp, Warning, TEXT("  Octree Size: %.0f (expanded from %.0f)"), ExpandedSize, MaxDimension);
-		}
-	}
 	
 	bIsInitialized = true;
 	
@@ -279,8 +256,9 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 	SET_DWORD_STAT(STAT_VoxelFluid_StaticWaterCells, StaticWaterCells);
 	SET_FLOAT_STAT(STAT_VoxelFluid_TotalVolume, TotalVolume);
 	
+	
 	// Use optimized parallel processing
-	if (bUseOptimizedParallelProcessing && ChunksNeedingUpdate.Num() > 2)
+	if (ChunksNeedingUpdate.Num() > 2)
 	{
 		// Process all chunks in parallel with optimized thread count
 		const int32 OptimalThreads = FMath::Min(8, FMath::Max(1, FPlatformMisc::NumberOfCoresIncludingHyperthreads() * 3 / 4));
@@ -407,19 +385,10 @@ UFluidChunk* UFluidChunkManager::GetOrCreateChunk(const FFluidChunkCoord& Coord)
 	Chunk->EvaporationRate = EvaporationRate;
 	
 	// Enable sparse representation if configured
-	if (bUseSparseGrid)
-	{
-		Chunk->bUseSparseRepresentation = false; // Start dense, will auto-convert when appropriate
-	}
 	
 	LoadedChunks.Add(Coord, Chunk);
 	InactiveChunkCoords.Add(Coord);
 	
-	// Add to octree if enabled
-	if (bUseOctree && FluidOctree)
-	{
-		FluidOctree->InsertChunk(Chunk);
-	}
 	
 	return Chunk;
 }
@@ -591,15 +560,15 @@ TArray<UFluidChunk*> UFluidChunkManager::GetActiveChunks() const
 	return Result;
 }
 
+TArray<UFluidChunk*> UFluidChunkManager::GetVisibleChunks() const
+{
+	// For now, just return the same as GetActiveChunks - no optimizations
+	return GetActiveChunks();
+}
+
 TArray<UFluidChunk*> UFluidChunkManager::GetChunksInRadius(const FVector& Center, float Radius) const
 {
-	// Use octree for optimized spatial query if available
-	if (bUseOctree && FluidOctree)
-	{
-		return FluidOctree->QueryChunksInRadius(Center, Radius);
-	}
-	
-	// Fallback to linear search
+	// Linear search
 	TArray<UFluidChunk*> Result;
 	const float RadiusSq = Radius * Radius;
 	
@@ -627,22 +596,7 @@ TArray<FFluidChunkCoord> UFluidChunkManager::GetChunksInBounds(const FBox& Bound
 	if (!bIsInitialized)
 		return Result;
 	
-	// Use octree for optimized spatial query if available
-	if (bUseOctree && FluidOctree)
-	{
-		TArray<UFluidChunk*> Chunks = FluidOctree->QueryChunksInBounds(Bounds);
-		Result.Reserve(Chunks.Num());
-		for (UFluidChunk* Chunk : Chunks)
-		{
-			if (Chunk)
-			{
-				Result.Add(Chunk->ChunkCoord);
-			}
-		}
-		return Result;
-	}
-	
-	// Fallback to grid-based calculation
+	// Grid-based calculation
 	// Calculate chunk range from bounds
 	const float ChunkWorldSize = ChunkSize * CellSize;
 	
@@ -884,7 +838,7 @@ void UFluidChunkManager::UpdateChunkStates(const TArray<FVector>& ViewerPosition
 	for (const FFluidChunkCoord& Coord : ChunksToUnload)
 	{
 		RequestChunkUnload(Coord);
-		UE_LOG(LogTemp, Warning, TEXT("Requesting unload of chunk %s"), *Coord.ToString());
+		// UE_LOG(LogTemp, Warning, TEXT("Requesting unload of chunk %s"), *Coord.ToString());
 	}
 	
 	for (const FFluidChunkCoord& Coord : ChunksToActivate)
@@ -1536,7 +1490,6 @@ void UFluidChunkManager::LoadChunk(const FFluidChunkCoord& Coord)
 			if (StaticWaterManager->ChunkIntersectsStaticWater(ChunkBounds))
 			{
 				StaticWaterManager->ApplyStaticWaterToChunk(Chunk);
-				UE_LOG(LogTemp, Verbose, TEXT("Applied static water to chunk %s on load"), *Coord.ToString());
 			}
 		}
 		
@@ -1589,7 +1542,7 @@ void UFluidChunkManager::UnloadChunk(const FFluidChunkCoord& Coord)
 				}
 				else
 				{
-					UE_LOG(LogTemp, Log, TEXT("PERSISTENCE: Chunk %s has no fluid, not saving"), *Coord.ToString());
+					// UE_LOG(LogTemp, Log, TEXT("PERSISTENCE: Chunk %s has no fluid, not saving"), *Coord.ToString());
 				}
 			}
 			else
@@ -1602,11 +1555,6 @@ void UFluidChunkManager::UnloadChunk(const FFluidChunkCoord& Coord)
 			InactiveChunkCoords.Remove(Coord);
 			BorderOnlyChunkCoords.Remove(Coord);
 			
-			// Remove from octree if enabled
-			if (bUseOctree && FluidOctree)
-			{
-				FluidOctree->RemoveChunk(Coord);
-			}
 			
 			// Track unload time for debug
 			ChunkStateHistory.Add(Coord, FString::Printf(TEXT("Unloaded at %.2fs"), FPlatformTime::Seconds()));
@@ -1688,43 +1636,6 @@ void UFluidChunkManager::DrawDebugChunks(UWorld* World) const
 	if (!World)
 		return;
 	
-	// Draw octree debug visualization if enabled
-	if (bDrawOctreeDebug && bUseOctree && FluidOctree)
-	{
-		// Get viewer position for distance-based culling
-		FVector ViewerPosition = WorldOrigin;
-		if (World->GetNetMode() == NM_Standalone)
-		{
-			if (APlayerController* PC = World->GetFirstPlayerController())
-			{
-				if (APawn* Pawn = PC->GetPawn())
-				{
-					ViewerPosition = Pawn->GetActorLocation();
-				}
-			}
-		}
-		
-		UE_LOG(LogTemp, Warning, TEXT("=== DRAWING OCTREE DEBUG ==="));
-		UE_LOG(LogTemp, Warning, TEXT("Octree Debug Enabled: %s"), bDrawOctreeDebug ? TEXT("YES") : TEXT("NO"));
-		UE_LOG(LogTemp, Warning, TEXT("Octree Enabled: %s"), bUseOctree ? TEXT("YES") : TEXT("NO"));
-		UE_LOG(LogTemp, Warning, TEXT("Octree Object: %s"), FluidOctree ? TEXT("VALID") : TEXT("NULL"));
-		UE_LOG(LogTemp, Warning, TEXT("Viewer Position: %s"), *ViewerPosition.ToString());
-		UE_LOG(LogTemp, Warning, TEXT("Draw Distance: %.0f"), OctreeDebugDrawDistance);
-		
-		FluidOctree->DrawDebugOctree(World, ViewerPosition, OctreeDebugDrawDistance);
-		
-		UE_LOG(LogTemp, Warning, TEXT("==========================="));
-	}
-	else
-	{
-		if (bDrawOctreeDebug)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("Octree debug requested but conditions not met:"));
-			UE_LOG(LogTemp, Warning, TEXT("  bDrawOctreeDebug: %s"), bDrawOctreeDebug ? TEXT("YES") : TEXT("NO"));
-			UE_LOG(LogTemp, Warning, TEXT("  bUseOctree: %s"), bUseOctree ? TEXT("YES") : TEXT("NO"));
-			UE_LOG(LogTemp, Warning, TEXT("  FluidOctree: %s"), FluidOctree ? TEXT("VALID") : TEXT("NULL"));
-		}
-	}
 	
 	// Early exit if chunk debug is disabled
 	if (!bShowChunkBorders && !bShowChunkStates)
@@ -2170,19 +2081,6 @@ void UFluidChunkManager::ForceActivateChunk(UFluidChunk* Chunk)
 	ActivateChunk(Chunk);
 }
 
-void UFluidChunkManager::EnableCompressedMode(bool bEnable)
-{
-	// Apply compression settings to all loaded chunks
-	// Note: Individual chunks handle their own compression in SerializeChunkData/DeserializeChunkData
-	// This is a placeholder for future chunk-level compression implementation
-	
-	UE_LOG(LogTemp, Warning, TEXT("FluidChunkManager: Memory compression %s for all chunks"), 
-		bEnable ? TEXT("ENABLED") : TEXT("DISABLED"));
-	
-	// The actual compression happens in FChunkPersistentData which already uses compressed cells
-	// This flag could be used to enable/disable compression at runtime
-	// For now, compression is always used when saving/loading chunks
-}
 
 void UFluidChunkManager::ForceUnloadAllChunks()
 {
@@ -2254,181 +2152,6 @@ bool UFluidChunkManager::ShouldUpdateChunk(UFluidChunk* Chunk) const
 	return TimeSinceLastUpdate > 0.033f; // Update at least every 33ms (30 FPS)
 }
 
-void UFluidChunkManager::EnableOctreeOptimization(bool bEnable)
-{
-	if (bEnable == bUseOctree)
-		return;
-	
-	bUseOctree = bEnable;
-	
-	if (bUseOctree)
-	{
-		// Create and initialize octree
-		if (!FluidOctree)
-		{
-			FluidOctree = NewObject<UFluidOctree>(this, UFluidOctree::StaticClass());
-		}
-		
-		if (FluidOctree)
-		{
-			FVector WorldCenter = WorldOrigin + WorldSize * 0.5f;
-			float MaxDimension = FMath::Max3(WorldSize.X, WorldSize.Y, WorldSize.Z);
-			FluidOctree->Initialize(WorldCenter, MaxDimension);
-			
-			// Add all existing chunks to octree
-			for (const auto& Pair : LoadedChunks)
-			{
-				if (Pair.Value)
-				{
-					FluidOctree->InsertChunk(Pair.Value);
-				}
-			}
-			
-			UE_LOG(LogTemp, Log, TEXT("Octree optimization enabled. Added %d chunks to octree"), LoadedChunks.Num());
-		}
-	}
-	else
-	{
-		// Clear octree
-		if (FluidOctree)
-		{
-			FluidOctree->Clear();
-			UE_LOG(LogTemp, Log, TEXT("Octree optimization disabled"));
-		}
-	}
-}
 
-FString UFluidChunkManager::GetOctreeStats() const
-{
-	if (!bUseOctree || !FluidOctree)
-	{
-		return TEXT("Octree optimization disabled");
-	}
-	
-	return FluidOctree->GetDebugStats();
-}
 
-void UFluidChunkManager::OptimizeOctree()
-{
-	if (!bUseOctree || !FluidOctree)
-		return;
-	
-	FluidOctree->OptimizeTree();
-	
-	// Update all chunks in octree
-	for (const auto& Pair : LoadedChunks)
-	{
-		if (Pair.Value)
-		{
-			FluidOctree->UpdateChunk(Pair.Value);
-		}
-	}
-	
-	UE_LOG(LogTemp, Log, TEXT("Octree optimized: %s"), *FluidOctree->GetDebugStats());
-}
 
-TArray<UFluidChunk*> UFluidChunkManager::QueryChunksInFrustum(const FMatrix& ViewProjectionMatrix, float MaxDistance)
-{
-	TArray<UFluidChunk*> Result;
-	
-	if (!bUseOctree || !FluidOctree)
-	{
-		// Fallback to simple distance-based query
-		FVector ViewOrigin = ViewProjectionMatrix.Inverse().GetOrigin();
-		return GetChunksInRadius(ViewOrigin, MaxDistance);
-	}
-	
-	// Extract frustum planes from view-projection matrix
-	FPlane Planes[6];
-	
-	// Left plane
-	Planes[0] = FPlane(
-		ViewProjectionMatrix.M[0][3] + ViewProjectionMatrix.M[0][0],
-		ViewProjectionMatrix.M[1][3] + ViewProjectionMatrix.M[1][0],
-		ViewProjectionMatrix.M[2][3] + ViewProjectionMatrix.M[2][0],
-		ViewProjectionMatrix.M[3][3] + ViewProjectionMatrix.M[3][0]
-	);
-	
-	// Right plane
-	Planes[1] = FPlane(
-		ViewProjectionMatrix.M[0][3] - ViewProjectionMatrix.M[0][0],
-		ViewProjectionMatrix.M[1][3] - ViewProjectionMatrix.M[1][0],
-		ViewProjectionMatrix.M[2][3] - ViewProjectionMatrix.M[2][0],
-		ViewProjectionMatrix.M[3][3] - ViewProjectionMatrix.M[3][0]
-	);
-	
-	// Bottom plane
-	Planes[2] = FPlane(
-		ViewProjectionMatrix.M[0][3] + ViewProjectionMatrix.M[0][1],
-		ViewProjectionMatrix.M[1][3] + ViewProjectionMatrix.M[1][1],
-		ViewProjectionMatrix.M[2][3] + ViewProjectionMatrix.M[2][1],
-		ViewProjectionMatrix.M[3][3] + ViewProjectionMatrix.M[3][1]
-	);
-	
-	// Top plane
-	Planes[3] = FPlane(
-		ViewProjectionMatrix.M[0][3] - ViewProjectionMatrix.M[0][1],
-		ViewProjectionMatrix.M[1][3] - ViewProjectionMatrix.M[1][1],
-		ViewProjectionMatrix.M[2][3] - ViewProjectionMatrix.M[2][1],
-		ViewProjectionMatrix.M[3][3] - ViewProjectionMatrix.M[3][1]
-	);
-	
-	// Near plane
-	Planes[4] = FPlane(
-		ViewProjectionMatrix.M[0][2],
-		ViewProjectionMatrix.M[1][2],
-		ViewProjectionMatrix.M[2][2],
-		ViewProjectionMatrix.M[3][2]
-	);
-	
-	// Far plane
-	Planes[5] = FPlane(
-		ViewProjectionMatrix.M[0][3] - ViewProjectionMatrix.M[0][2],
-		ViewProjectionMatrix.M[1][3] - ViewProjectionMatrix.M[1][2],
-		ViewProjectionMatrix.M[2][3] - ViewProjectionMatrix.M[2][2],
-		ViewProjectionMatrix.M[3][3] - ViewProjectionMatrix.M[3][2]
-	);
-	
-	// Normalize planes
-	for (int32 i = 0; i < 6; i++)
-	{
-		float Length = FMath::Sqrt(Planes[i].X * Planes[i].X + Planes[i].Y * Planes[i].Y + Planes[i].Z * Planes[i].Z);
-		if (Length > 0.0f)
-		{
-			Planes[i] /= Length;
-		}
-	}
-	
-	// Query all chunks from octree and test against frustum
-	FVector ViewOrigin = ViewProjectionMatrix.Inverse().GetOrigin();
-	TArray<UFluidChunk*> AllChunks = FluidOctree->QueryChunksInRadius(ViewOrigin, MaxDistance);
-	
-	for (UFluidChunk* Chunk : AllChunks)
-	{
-		if (!Chunk)
-			continue;
-		
-		FBox ChunkBounds = Chunk->GetWorldBounds();
-		bool bInFrustum = true;
-		
-		// Test chunk bounds against each frustum plane
-		for (int32 i = 0; i < 6; i++)
-		{
-			FVector ClosestPoint = ChunkBounds.GetClosestPointTo(FVector(Planes[i].X, Planes[i].Y, Planes[i].Z) * 10000.0f + ViewOrigin);
-			float Distance = Planes[i].PlaneDot(ClosestPoint);
-			
-			if (Distance < 0.0f)
-			{
-				bInFrustum = false;
-				break;
-			}
-		}
-		
-		if (bInFrustum)
-		{
-			Result.Add(Chunk);
-		}
-	}
-	
-	return Result;
-}

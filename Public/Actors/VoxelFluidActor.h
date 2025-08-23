@@ -180,86 +180,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water", meta = (EditCondition = "bAutoCreateOcean"))
 	float OceanSize = 100000.0f;
 
-	// Advanced Optimization Settings
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Settling")
-	bool bUseSleepChains = true;
+	// Optimization settings removed
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Settling")
-	bool bUsePredictiveSettling = true;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Settling", meta = (ClampMin = "1.0", ClampMax = "10.0"))
-	float SleepChainMergeDistance = 3.0f;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Settling", meta = (ClampMin = "0.5", ClampMax = "1.0"))
-	float PredictiveSettlingConfidenceThreshold = 0.95f;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Memory")
-	bool bUseCompressedStorage = false;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Memory", meta = (CallInEditor = "true"))
-	bool bEnableMemoryCompression = false;
-	
-	// Phase 2 Advanced Optimizations
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Advanced", meta = (DisplayName = "Use Multi-Resolution Pressure Solver"))
-	bool bUseMultiResolutionSolver = false;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Advanced", meta = (ClampMin = "1", ClampMax = "4"))
-	int32 PressureSolverResolutionDivisor = 2;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Advanced", meta = (DisplayName = "Use Sparse Grid"))
-	bool bUseSparseGrid = false;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Advanced", meta = (ClampMin = "0.001", ClampMax = "0.1"))
-	float SparseGridThreshold = 0.001f;
-	
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Optimization|Stats")
-	float SparseGridCompressionRatio = 0.0f;
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization", meta = (CallInEditor = "true"))
-	void ToggleMemoryCompression();
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization", meta = (CallInEditor = "true"))
-	FString GetMemoryUsageStats() const;
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization", meta = (CallInEditor = "true"))
-	void TestSparseGridPerformance();
-	
-	// Octree optimization methods
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Octree")
-	bool bUseOctreeOptimization = true;
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
-	void ToggleOctreeOptimization();
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
-	FString GetOctreePerformanceStats() const;
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
-	void OptimizeOctreeStructure();
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree")
-	int32 GetOctreeNodeCount() const;
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
-	void TestOctreeVisualization();
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
-	void ForceDrawOctreeDebug();
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
-	void CreateTestFluidCluster();
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
-	void CreateWideHorizontalFluidPattern();
-	
-	UFUNCTION(BlueprintCallable, Category = "Optimization|Octree", meta = (CallInEditor = "true"))
-	void ExpandSimulationBounds();
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Octree")
-	bool bShowOctreeDebug = false;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Optimization|Octree", meta = (ClampMin = "1000.0", ClampMax = "50000.0"))
-	float OctreeDebugDrawDistance = 15000.0f; // Increased default for better visibility
+	// Octree optimization removed
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bShowFlowVectors = false;
@@ -291,6 +214,7 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Performance")
 	float GetTotalFluidVolume() const;
+	
 
 	UFUNCTION(BlueprintCallable, Category = "Chunk System")
 	int32 GetLoadedChunkCount() const;
