@@ -1117,8 +1117,6 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 	static float LastLogTime = 0.0f;
 	if (CurrentTime - LastLogTime > 2.0f)
 	{
-		UE_LOG(LogTemp, Log, TEXT("Marching Cubes: %d chunks rendered, %d cached, %d generated this frame, %d pending updates"),
-			RenderedChunks, CachedMeshesUsed, MeshesGenerated, ChunksNeedingMeshUpdate.Num());
 		LastLogTime = CurrentTime;
 	}
 }

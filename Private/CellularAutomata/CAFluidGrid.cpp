@@ -145,8 +145,6 @@ void UCAFluidGrid::UpdateSimulation(float DeltaTime)
 		
 		if (InitFlagsTime > 0.5 || PredictiveTime > 0.5 || SleepChainTime > 0.5)
 		{
-			UE_LOG(LogTemp, VeryVerbose, TEXT("Optimization Timing: InitFlags=%.2fms, Predictive=%.2fms, SleepChain=%.2fms"),
-				InitFlagsTime, PredictiveTime, SleepChainTime);
 		}
 	}
 
@@ -162,8 +160,6 @@ void UCAFluidGrid::UpdateSimulation(float DeltaTime)
 	if (FluidCellCount > 0)
 	{
 		const float SettledPercentage = (SettledCellCount * 100.0f) / FluidCellCount;
-		UE_LOG(LogTemp, VeryVerbose, TEXT("Fluid Settling: %d/%d cells settled (%.1f%%), %d cells active"), 
-			SettledCellCount, FluidCellCount, SettledPercentage, ActiveCellCount);
 	}
 }
 
@@ -585,8 +581,6 @@ void UCAFluidGrid::UpdateSettledStates()
 		if (FluidCellCount > 0)
 		{
 			const float SettledPercentage = (NewSettledCount * 100.0f) / FluidCellCount;
-			UE_LOG(LogTemp, Log, TEXT("Settling Status: %d/%d fluid cells settled (%.1f%%), %d cells need update"),
-				NewSettledCount, FluidCellCount, SettledPercentage, ActiveCellCount);
 		}
 		
 		LastSettlingLogTime = CurrentTime;
@@ -832,7 +826,6 @@ void UCAFluidGrid::ForceWakeAllFluid()
 		}
 	}
 	
-	UE_LOG(LogTemp, Warning, TEXT("ForceWakeAllFluid: Woke up all fluid cells"));
 }
 
 // Settling optimization helper methods
@@ -1880,9 +1873,6 @@ void UCAFluidGrid::EnableCompressedMode(bool bEnable)
 		DecompressCells();
 	}
 	
-	UE_LOG(LogTemp, Log, TEXT("Fluid Grid Compression %s. Memory usage: %d KB"), 
-		bEnable ? TEXT("Enabled") : TEXT("Disabled"), 
-		GetCompressedMemorySize() / 1024);
 }
 
 void UCAFluidGrid::CompressCells()
@@ -2031,6 +2021,4 @@ void UCAFluidGrid::OptimizeMemoryLayout()
 	const int32 TotalMemory = GetCompressedMemorySize();
 	const float MemoryPerCell = (float)TotalMemory / (float)TotalCells;
 	
-	UE_LOG(LogTemp, Log, TEXT("Fluid Grid Memory Optimized: Total %d KB, %.1f bytes per cell"), 
-		TotalMemory / 1024, MemoryPerCell);
 }

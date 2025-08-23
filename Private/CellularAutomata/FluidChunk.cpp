@@ -135,9 +135,6 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 				int32 LocalZ = i / (ChunkSize * ChunkSize);
 				FVector WorldPos = ChunkWorldPosition + FVector(LocalX * CellSize, LocalY * CellSize, LocalZ * CellSize);
 				
-				UE_LOG(LogTemp, Error, TEXT("WATER IN SOLID TERRAIN! Chunk %s, Cell[%d,%d,%d], WorldPos %s, FluidLevel %.2f, TerrainHeight %.1f"),
-					*ChunkCoord.ToString(), LocalX, LocalY, LocalZ, *WorldPos.ToString(), 
-					Cells[i].FluidLevel, Cells[i].TerrainHeight);
 			}
 			
 			Cells[i].FluidLevel = 0.0f;
@@ -151,8 +148,6 @@ void UFluidChunk::UpdateSimulation(float DeltaTime)
 	
 	if (LocalCleanupCount > 0 && GlobalCleanupCount <= 100)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Cleaned %d water cells from solid terrain in chunk %s"), 
-			LocalCleanupCount, *ChunkCoord.ToString());
 	}
 	
 	// Smart optimization: If chunk has been fully settled for a while, reduce update frequency
@@ -695,8 +690,6 @@ FChunkPersistentData UFluidChunk::SerializeChunkData() const
 	PersistentData.ChunkCoord = ChunkCoord;
 	PersistentData.CompressFrom(Cells);
 	
-	UE_LOG(LogTemp, Log, TEXT("Serialized chunk %s: %d non-empty cells, %.2f total fluid"),
-	       *ChunkCoord.ToString(), PersistentData.NonEmptyCellCount, PersistentData.TotalFluidVolume);
 	
 	return PersistentData;
 }
@@ -705,15 +698,11 @@ void UFluidChunk::DeserializeChunkData(const FChunkPersistentData& PersistentDat
 {
 	if (!PersistentData.ValidateChecksum())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Chunk %s failed checksum validation, loading empty"),
-		       *ChunkCoord.ToString());
 		return;
 	}
 	
 	if (PersistentData.CompressedCells.Num() != Cells.Num())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Chunk %s size mismatch: expected %d cells, got %d"),
-		       *ChunkCoord.ToString(), Cells.Num(), PersistentData.CompressedCells.Num());
 		       
 		if (PersistentData.CompressedCells.Num() == ChunkSize * ChunkSize * ChunkSize)
 		{
@@ -730,8 +719,6 @@ void UFluidChunk::DeserializeChunkData(const FChunkPersistentData& PersistentDat
 	PersistentData.DecompressTo(Cells);
 	NextCells = Cells;
 	
-	UE_LOG(LogTemp, Log, TEXT("Deserialized chunk %s: %d non-empty cells, %.2f total fluid"),
-	       *ChunkCoord.ToString(), PersistentData.NonEmptyCellCount, PersistentData.TotalFluidVolume);
 	       
 	// Mark as needing mesh update if there's fluid
 	if (PersistentData.bHasFluid)
@@ -1585,8 +1572,6 @@ void UFluidChunk::ConvertToSparse()
 		NextCells[i] = FCAFluidCell();
 	}
 	
-	UE_LOG(LogTemp, Log, TEXT("Chunk %s converted to sparse: %d/%d cells (%.1f%% occupancy)"),
-		*ChunkCoord.ToString(), NonEmptyCells, TotalCells, SparseGridOccupancy * 100.0f);
 }
 
 void UFluidChunk::ConvertToDense()
@@ -1624,7 +1609,6 @@ void UFluidChunk::ConvertToDense()
 	SparseNextCells.Empty();
 	ActiveCellIndices.Empty();
 	
-	UE_LOG(LogTemp, Log, TEXT("Chunk %s converted to dense"), *ChunkCoord.ToString());
 }
 
 bool UFluidChunk::ShouldUseSparse() const

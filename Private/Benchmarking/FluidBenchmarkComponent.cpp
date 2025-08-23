@@ -49,7 +49,6 @@ void UFluidBenchmarkComponent::BeginPlay()
 	FluidActor = Cast<AVoxelFluidActor>(GetOwner());
 	if (!FluidActor)
 	{
-		UE_LOG(LogTemp, Error, TEXT("FluidBenchmarkComponent must be attached to a VoxelFluidActor!"));
 	}
 }
 
@@ -73,7 +72,6 @@ void UFluidBenchmarkComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 				? TestConfigs[CurrentConfigIndex].ConfigName 
 				: TEXT("Unknown");
 			
-			UE_LOG(LogTemp, Warning, TEXT("Starting benchmark: %s"), *CurrentResult.TestName);
 		}
 		return;
 	}
@@ -97,8 +95,6 @@ void UFluidBenchmarkComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 		{
 			StopBenchmark();
 			
-			UE_LOG(LogTemp, Warning, TEXT("All benchmarks complete!"));
-			UE_LOG(LogTemp, Warning, TEXT("\n%s"), *GetComparisonReport());
 			
 			if (bAutoSaveResults)
 			{
@@ -112,7 +108,6 @@ void UFluidBenchmarkComponent::StartBenchmark()
 {
 	if (!FluidActor)
 	{
-		UE_LOG(LogTemp, Error, TEXT("No FluidActor found!"));
 		return;
 	}
 
@@ -137,7 +132,6 @@ void UFluidBenchmarkComponent::StartBenchmark()
 	}
 	else
 	{
-		UE_LOG(LogTemp, Error, TEXT("No test configurations defined!"));
 		StopBenchmark();
 	}
 }
@@ -155,7 +149,6 @@ void UFluidBenchmarkComponent::StopBenchmark()
 		RestoreOriginalConfiguration();
 	}
 	
-	UE_LOG(LogTemp, Warning, TEXT("Benchmark stopped"));
 }
 
 void UFluidBenchmarkComponent::RunComparisonBenchmark()
@@ -209,7 +202,6 @@ void UFluidBenchmarkComponent::FinalizeBenchmark()
 	// Add current result to results array
 	BenchmarkResults.Add(CurrentResult);
 	
-	UE_LOG(LogTemp, Warning, TEXT("Benchmark complete: %s"), *CurrentResult.ToString());
 }
 
 void UFluidBenchmarkComponent::RunNextConfiguration()
@@ -271,7 +263,6 @@ void UFluidBenchmarkComponent::RunNextConfiguration()
 		FluidActor->StartSimulation();
 	}
 	
-	UE_LOG(LogTemp, Warning, TEXT("Starting warmup for: %s"), *TestConfigs[CurrentConfigIndex].ConfigName);
 }
 
 void UFluidBenchmarkComponent::ApplyConfiguration(const FBenchmarkConfig& Config)
@@ -287,11 +278,6 @@ void UFluidBenchmarkComponent::ApplyConfiguration(const FBenchmarkConfig& Config
 		// Note: Optimization settings removed - using default behavior
 	}
 	
-	UE_LOG(LogTemp, Log, TEXT("Applied config: %s (Sleep:%d, Predictive:%d, Compression:%d)"),
-		*Config.ConfigName,
-		Config.bUseSleepChains ? 1 : 0,
-		Config.bUsePredictiveSettling ? 1 : 0,
-		Config.bEnableMemoryCompression ? 1 : 0);
 }
 
 void UFluidBenchmarkComponent::RestoreOriginalConfiguration()
@@ -327,11 +313,9 @@ void UFluidBenchmarkComponent::SaveBenchmarkResults()
 	
 	if (FFileHelper::SaveStringToFile(CSVContent, *FileName))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Benchmark results saved to: %s"), *FileName);
 	}
 	else
 	{
-		UE_LOG(LogTemp, Error, TEXT("Failed to save benchmark results!"));
 	}
 }
 
@@ -460,7 +444,6 @@ void UFluidBenchmarkComponent::ClearResults()
 {
 	BenchmarkResults.Empty();
 	CurrentResult = FBenchmarkResult();
-	UE_LOG(LogTemp, Warning, TEXT("Benchmark results cleared"));
 }
 
 // Quick test implementations

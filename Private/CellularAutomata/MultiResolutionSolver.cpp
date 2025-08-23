@@ -365,9 +365,6 @@ void FSparseFluidGrid::ConvertToSparse(
 		}
 	}
 	
-	UE_LOG(LogTemp, Log, TEXT("Sparse Grid: %d active cells out of %d total (%.1f%% compression)"),
-		SparseCells.Num(), DenseCells.Num(), 
-		GetCompressionRatio(SparseCells.Num(), DenseCells.Num()));
 }
 
 void FSparseFluidGrid::ConvertToDense(

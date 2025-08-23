@@ -288,10 +288,6 @@ void UVoxelFluidIntegration::Update3DVoxelTerrain()
 					// Log sample cells for debugging
 					if (z == 5 && x % 20 == 0 && y % 20 == 0)
 					{
-						UE_LOG(LogTemp, Warning, TEXT("Cell[%d,%d,%d] at %s: %s -> %s"), 
-							x, y, z, *CellCenter.ToString(), 
-							bWasSolid ? TEXT("SOLID") : TEXT("EMPTY"),
-							bIsSolid ? TEXT("SOLID") : TEXT("EMPTY"));
 					}
 					
 					// Update the cell's solid state
@@ -300,8 +296,6 @@ void UVoxelFluidIntegration::Update3DVoxelTerrain()
 			}
 		}
 		
-		UE_LOG(LogTemp, Warning, TEXT("Update3DVoxelTerrain: Total:%d Solid:%d Changed:%d (%.1f%% solid)"), 
-			TotalCells, SolidCells, ChangedCells, (SolidCells * 100.0f) / TotalCells);
 		
 		// If terrain changed, force the fluid grid to re-evaluate
 		if (ChangedCells > 0)
@@ -315,7 +309,6 @@ void UVoxelFluidIntegration::Update3DVoxelTerrain()
 				FluidGrid->UpdateSimulation(0.016f);
 			}
 			
-			UE_LOG(LogTemp, Warning, TEXT("Forced fluid re-evaluation after %d terrain changes"), ChangedCells);
 		}
 	}
 }
@@ -371,8 +364,6 @@ void UVoxelFluidIntegration::UpdateChunk3DVoxelTerrain(const FFluidChunkCoord& C
 		}
 	}
 	
-	UE_LOG(LogTemp, Log, TEXT("UpdateChunk3DVoxelTerrain: Chunk %s updated with %d solid cells out of %d total"), 
-		*ChunkCoord.ToString(), SolidCellCount, ChunkSize * ChunkSize * ChunkSize);
 	
 	// Mark chunk as dirty to force mesh regeneration
 	Chunk->bDirty = true;
@@ -443,7 +434,6 @@ void UVoxelFluidIntegration::SetChunkManager(UFluidChunkManager* InChunkManager)
 	if (bUseChunkedSystem)
 	{
 		FluidGrid = nullptr; // Clear grid system when using chunked system
-		UE_LOG(LogTemp, Log, TEXT("VoxelFluidIntegration: Switched to chunked system"));
 	}
 }
 
@@ -493,24 +483,18 @@ void UVoxelFluidIntegration::UpdateTerrainForChunk(const FVector& ChunkWorldMin,
 			{
 				if (LocalX % 8 == 0 && LocalY % 8 == 0) // Sample every 8th cell to reduce spam
 				{
-					UE_LOG(LogTemp, Error, TEXT("PROBLEM CHUNK (2,0,-1) terrain sample [%d,%d]: WorldPos(%f,%f) TerrainHeight=%.1f"),
-						LocalX, LocalY, WorldPos.X, WorldPos.Y, TerrainHeight);
 					
 					// Check if this terrain height would make all cells solid
 					float ChunkTopZ = ChunkWorldMin.Z + ChunkSize * CellSize;
 					if (TerrainHeight > ChunkTopZ)
 					{
-						UE_LOG(LogTemp, Error, TEXT("  >>> TERRAIN TOO HIGH! Height %.1f > ChunkTop %.1f - ALL CELLS WILL BE SOLID!"),
-							TerrainHeight, ChunkTopZ);
 					}
 					else if (TerrainHeight > ChunkWorldMin.Z)
 					{
 						float PercentSolid = ((TerrainHeight - ChunkWorldMin.Z) / (ChunkSize * CellSize)) * 100.0f;
-						UE_LOG(LogTemp, Error, TEXT("  Terrain intersects chunk - approximately %.1f%% will be solid"), PercentSolid);
 					}
 					else
 					{
-						UE_LOG(LogTemp, Error, TEXT("  Terrain is below chunk - should be 0%% solid"));
 					}
 				}
 			}
@@ -523,7 +507,6 @@ void UVoxelFluidIntegration::UpdateTerrainForChunk(const FVector& ChunkWorldMin,
 		}
 	}
 	
-	UE_LOG(LogTemp, Warning, TEXT("TERRAIN UPDATED: Chunk %s terrain sampling completed"), *ChunkCoord.ToString());
 }
 
 void UVoxelFluidIntegration::UpdateTerrainForChunkCoord(const FFluidChunkCoord& ChunkCoord)
@@ -624,8 +607,6 @@ void UVoxelFluidIntegration::OnVoxelTerrainModified(const FBox& ModifiedBounds)
 		PendingTerrainUpdates.Add(ModifiedBounds);
 	}
 	
-	UE_LOG(LogTemp, Log, TEXT("OnVoxelTerrainModified: Queued terrain update for region Min:%s Max:%s"), 
-		*ModifiedBounds.Min.ToString(), *ModifiedBounds.Max.ToString());
 	
 	// If immediate update is preferred (for responsiveness), uncomment:
 	// UpdateTerrainInRegion(ModifiedBounds);
@@ -706,8 +687,6 @@ void UVoxelFluidIntegration::UpdateChunkCellsInRegion(UFluidChunk* Chunk, const 
 	
 	if (UpdatedCells > 0)
 	{
-		UE_LOG(LogTemp, Log, TEXT("UpdateChunkCellsInRegion: Updated %d cells in chunk %s"), 
-			UpdatedCells, *Chunk->ChunkCoord.ToString());
 	}
 }
 
@@ -755,7 +734,6 @@ void UVoxelFluidIntegration::UpdateGridCellsInRegion(const FBox& Region)
 	
 	if (UpdatedCells > 0)
 	{
-		UE_LOG(LogTemp, Log, TEXT("UpdateGridCellsInRegion: Updated %d cells"), UpdatedCells);
 	}
 }
 
@@ -763,14 +741,9 @@ void UVoxelFluidIntegration::RefreshTerrainAfterSculpting()
 {
 	if (!bUse3DVoxelTerrain)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("RefreshTerrainAfterSculpting: 3D Voxel Terrain is not enabled"));
 		return;
 	}
 	
-	UE_LOG(LogTemp, Warning, TEXT("=== RefreshTerrainAfterSculpting START ==="));
-	UE_LOG(LogTemp, Warning, TEXT("Layer: %s, SamplingMethod: %d"), 
-		TerrainLayer.Layer ? TEXT("Set") : TEXT("NULL"), 
-		(int32)SamplingMethod);
 	
 	// Store old cache size for comparison
 	int32 OldCacheSize = CachedVoxelStates.Num();
@@ -778,7 +751,6 @@ void UVoxelFluidIntegration::RefreshTerrainAfterSculpting()
 	// Clear the cache to force full refresh
 	CachedVoxelStates.Empty();
 	
-	UE_LOG(LogTemp, Warning, TEXT("Cleared cache of %d entries"), OldCacheSize);
 	
 	// Do a full 3D terrain update
 	Update3DVoxelTerrain();
@@ -787,7 +759,6 @@ void UVoxelFluidIntegration::RefreshTerrainAfterSculpting()
 	bTerrainNeedsRefresh = false;
 	LastTerrainRefreshTime = 0.0f;
 	
-	UE_LOG(LogTemp, Warning, TEXT("=== RefreshTerrainAfterSculpting END - New cache size: %d ==="), CachedVoxelStates.Num());
 }
 
 void UVoxelFluidIntegration::RefreshTerrainInRadius(const FVector& Center, float Radius)
@@ -797,8 +768,6 @@ void UVoxelFluidIntegration::RefreshTerrainInRadius(const FVector& Center, float
 	if (!bUse3DVoxelTerrain)
 		return;
 	
-	UE_LOG_VOXELFLUID_COMPONENT_DEBUG(Warning, TEXT("=== RefreshTerrainInRadius START ==="));
-	UE_LOG_VOXELFLUID_COMPONENT_DEBUG(Warning, TEXT("Center: %s, Radius: %.1f"), *Center.ToString(), Radius);
 	
 	if (bUseChunkedSystem && ChunkManager)
 	{
@@ -830,8 +799,6 @@ void UVoxelFluidIntegration::RefreshTerrainInRadius(const FVector& Center, float
 					{
 						if (FluidActor->StaticWaterManager)
 						{
-							UE_LOG(LogTemp, Warning, TEXT("Triggering dynamic water refill for chunk %s after terrain change"),
-								*ChunkCoord.ToString());
 							FluidActor->StaticWaterManager->CreateDynamicFluidSourcesInRadius(Chunk, Center, Radius);
 						}
 					}
@@ -839,8 +806,6 @@ void UVoxelFluidIntegration::RefreshTerrainInRadius(const FVector& Center, float
 			}
 		}
 		
-		UE_LOG(LogTemp, Warning, TEXT("Updated %d chunks with %d total cell changes"), 
-			AffectedChunks.Num(), TotalChangedCells);
 	}
 	else if (FluidGrid)
 	{
@@ -858,11 +823,9 @@ void UVoxelFluidIntegration::RefreshTerrainInRadius(const FVector& Center, float
 				FluidGrid->UpdateSimulation(0.016f);
 			}
 			
-			UE_LOG(LogTemp, Warning, TEXT("Updated %d cells in radius"), ChangedCells);
 		}
 	}
 	
-	UE_LOG_VOXELFLUID_COMPONENT_DEBUG(Warning, TEXT("=== RefreshTerrainInRadius END ==="));
 }
 
 int32 UVoxelFluidIntegration::UpdateGridCellsInRadius(const FVector& Center, float Radius)
@@ -911,10 +874,6 @@ int32 UVoxelFluidIntegration::UpdateGridCellsInRadius(const FVector& Center, flo
 					// Log sample changes for debugging
 					if (ChangedCells <= 5)
 					{
-						UE_LOG(LogTemp, VeryVerbose, TEXT("Cell[%d,%d,%d]: %s -> %s"), 
-							x, y, z,
-							bWasSolid ? TEXT("SOLID") : TEXT("EMPTY"),
-							bIsSolid ? TEXT("SOLID") : TEXT("EMPTY"));
 					}
 				}
 			}
@@ -1018,7 +977,6 @@ void UVoxelFluidIntegration::WakeFluidInRadius(const FVector& Center, float Radi
 		}
 	}
 	
-	UE_LOG(LogTemp, VeryVerbose, TEXT("Woke %d fluid cells in radius %.1f"), WokenCells, Radius);
 }
 
 bool UVoxelFluidIntegration::QueryVoxelAtPosition(const FVector& WorldPosition, float& OutVoxelValue)
@@ -1039,7 +997,6 @@ bool UVoxelFluidIntegration::QueryVoxelAtPosition(const FVector& WorldPosition, 
 			static bool bLoggedLayer = false;
 			if (!bLoggedLayer)
 			{
-				UE_LOG(LogTemp, Warning, TEXT("Using 3D Terrain Layer: Set"));
 				bLoggedLayer = true;
 			}
 		}
@@ -1054,7 +1011,6 @@ bool UVoxelFluidIntegration::QueryVoxelAtPosition(const FVector& WorldPosition, 
 			static bool bLoggedLayer = false;
 			if (!bLoggedLayer)
 			{
-				UE_LOG(LogTemp, Warning, TEXT("Using Regular Terrain Layer: Set"));
 				bLoggedLayer = true;
 			}
 		}
@@ -1065,7 +1021,6 @@ bool UVoxelFluidIntegration::QueryVoxelAtPosition(const FVector& WorldPosition, 
 		static bool bLoggedNoLayer = false;
 		if (!bLoggedNoLayer)
 		{
-			UE_LOG(LogTemp, Error, TEXT("QueryVoxelAtPosition: No valid voxel layer configured!"));
 			bLoggedNoLayer = true;
 		}
 		return false;
@@ -1098,9 +1053,6 @@ bool UVoxelFluidIntegration::QueryVoxelAtPosition(const FVector& WorldPosition, 
 				static int32 LogCounter = 0;
 				if (LogCounter++ % 100 == 0) // Log every 100th query
 				{
-					UE_LOG(LogTemp, VeryVerbose, TEXT("Voxel at %s: Value=%.3f"), 
-						*WorldPosition.ToString(), 
-						QueryResult.Value);
 				}
 			}
 			
@@ -1164,8 +1116,6 @@ bool UVoxelFluidIntegration::QueryVoxelAtPosition(const FVector& WorldPosition, 
 				static int32 LogCounter = 0;
 				if (LogCounter++ % 100 == 0)
 				{
-					UE_LOG(LogTemp, VeryVerbose, TEXT("Combined %d layers at %s: Result=%.3f"), 
-						LayerValues.Num(), *WorldPosition.ToString(), OutVoxelValue);
 				}
 			}
 			
@@ -1202,7 +1152,6 @@ bool UVoxelFluidIntegration::CheckIfCellIsSolid(const FVector& CellCenter, int32
 		static bool bLoggedMissingLayer = false;
 		if (!bLoggedMissingLayer)
 		{
-			UE_LOG(LogTemp, Error, TEXT("CheckIfCellIsSolid: No valid voxel layer configured"));
 			bLoggedMissingLayer = true;
 		}
 		return false;
@@ -1253,8 +1202,6 @@ bool UVoxelFluidIntegration::CheckIfCellIsSolid(const FVector& CellCenter, int32
 		// Log detailed info for debugging
 		if (bLogVoxelValues && GridX % 20 == 0 && GridY % 20 == 0 && GridZ == 5)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Cell[%d,%d,%d]: %d/9 points solid = %s"), 
-				GridX, GridY, GridZ, SolidCount, bResult ? TEXT("SOLID") : TEXT("EMPTY"));
 		}
 		
 		return bResult;
@@ -1276,9 +1223,6 @@ bool UVoxelFluidIntegration::CheckIfCellIsSolid(const FVector& CellCenter, int32
 			// Log for debugging
 			if (bLogVoxelValues && GridX % 20 == 0 && GridY % 20 == 0 && GridZ == 5)
 			{
-				UE_LOG(LogTemp, Warning, TEXT("Cell[%d,%d,%d] at %s: VoxelValue=%.3f -> %s"), 
-					GridX, GridY, GridZ, *CellCenter.ToString(), VoxelValue,
-					bIsSolid ? TEXT("SOLID") : TEXT("EMPTY"));
 			}
 			
 			return bIsSolid;
@@ -1293,7 +1237,6 @@ void UVoxelFluidIntegration::ForceRefreshVoxelCache()
 {
 	if (!IsVoxelWorldValid())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("ForceRefreshVoxelCache: VoxelWorld is NULL"));
 		return;
 	}
 	
@@ -1307,66 +1250,49 @@ void UVoxelFluidIntegration::ForceRefreshVoxelCache()
 	if (AActor* VoxelActor = Cast<AActor>(VoxelWorld))
 	{
 		VoxelActor->UpdateComponentTransforms();
-		UE_LOG(LogTemp, Warning, TEXT("ForceRefreshVoxelCache: Updated voxel actor transforms"));
 	}
 	
 	// Mark terrain needs refresh
 	bTerrainNeedsRefresh = true;
 	
-	UE_LOG(LogTemp, Warning, TEXT("ForceRefreshVoxelCache: Cache cleared, terrain marked for refresh"));
 }
 
 void UVoxelFluidIntegration::LogAvailableVoxelLayers()
 {
-	UE_LOG(LogTemp, Warning, TEXT("=== Available Voxel Layers ==="));
 	
 	if (!IsVoxelWorldValid())
 	{
-		UE_LOG(LogTemp, Error, TEXT("VoxelWorld is NULL"));
 		return;
 	}
 	
-	UE_LOG(LogTemp, Warning, TEXT("VoxelWorld: %s"), *VoxelWorld->GetName());
 	
 	// Log configured layers
 	if (TerrainLayer.Layer)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Regular Terrain Layer: Set"));
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Regular Terrain Layer: Not Set"));
 	}
 	
 	if (bUse3DVoxelTerrain)
 	{
 		if (Terrain3DLayer.Layer)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("3D Terrain Layer: Set"));
 		}
 		else
 		{
-			UE_LOG(LogTemp, Warning, TEXT("3D Terrain Layer: Not Set"));
 		}
 		
-		UE_LOG(LogTemp, Warning, TEXT("Use Separate 3D Layer: %s"), bUseSeparate3DLayer ? TEXT("Yes") : TEXT("No"));
-		UE_LOG(LogTemp, Warning, TEXT("3D Query Mode: %s"), 
-			*UEnum::GetValueAsString(Terrain3DQueryMode));
-		UE_LOG(LogTemp, Warning, TEXT("Solid Threshold: %.3f"), SolidThreshold);
-		UE_LOG(LogTemp, Warning, TEXT("Invert Solid Detection: %s"), bInvertSolidDetection ? TEXT("Yes") : TEXT("No"));
 		
 		if (Additional3DLayers.Num() > 0)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Additional 3D Layers:"));
 			for (int32 i = 0; i < Additional3DLayers.Num(); i++)
 			{
 				if (Additional3DLayers[i].Layer)
 				{
-					UE_LOG(LogTemp, Warning, TEXT("  [%d] Set"), i);
 				}
 				else
 				{
-					UE_LOG(LogTemp, Warning, TEXT("  [%d] Not Set"), i);
 				}
 			}
 		}
@@ -1386,13 +1312,9 @@ void UVoxelFluidIntegration::LogAvailableVoxelLayers()
 						bool bIsSolid = (VoxelValue < SolidThreshold);
 						if (bInvertSolidDetection) bIsSolid = !bIsSolid;
 						
-						UE_LOG(LogTemp, Warning, TEXT("Test at player position %s:"), *TestPos.ToString());
-						UE_LOG(LogTemp, Warning, TEXT("  Voxel Value: %.3f"), VoxelValue);
-						UE_LOG(LogTemp, Warning, TEXT("  Is Solid: %s"), bIsSolid ? TEXT("Yes") : TEXT("No"));
 					}
 					else
 					{
-						UE_LOG(LogTemp, Error, TEXT("Failed to query voxel at player position"));
 					}
 				}
 			}
@@ -1400,10 +1322,8 @@ void UVoxelFluidIntegration::LogAvailableVoxelLayers()
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("3D Voxel Terrain is DISABLED"));
 	}
 	
-	UE_LOG(LogTemp, Warning, TEXT("=== End Voxel Layers ==="));
 }
 
 void UVoxelFluidIntegration::DrawDebugSolidCells()

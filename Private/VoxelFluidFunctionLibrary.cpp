@@ -27,8 +27,6 @@ AVoxelFluidActor* UVoxelFluidFunctionLibrary::SpawnFluidSystem(UObject* WorldCon
 		FluidActor->SimulationBoundsExtent = FVector(GridSizeX * CellSize * 0.5f, GridSizeY * CellSize * 0.5f, GridSizeZ * CellSize * 0.5f);
 		FluidActor->InitializeFluidSystem();
 		
-		UE_LOG(LogTemp, Log, TEXT("Spawned Voxel Fluid System at %s with effective size %dx%dx%d cells"), 
-			   *Location.ToString(), GridSizeX, GridSizeY, GridSizeZ);
 	}
 
 	return FluidActor;
@@ -106,7 +104,6 @@ void UVoxelFluidFunctionLibrary::SyncAllFluidActorsWithTerrain(UObject* WorldCon
 		}
 	}
 	
-	UE_LOG(LogTemp, Log, TEXT("Synced %d fluid actors with terrain"), FoundActors.Num());
 }
 
 float UVoxelFluidFunctionLibrary::GetFluidDepthAtLocation(AVoxelFluidActor* FluidActor, const FVector& WorldLocation)
@@ -145,7 +142,6 @@ void UVoxelFluidFunctionLibrary::TestFluidOnTerrain(AVoxelFluidActor* FluidActor
 		
 		FluidActor->AddFluidAtLocation(TestLocation, 0.8f);
 		
-		UE_LOG(LogTemp, Log, TEXT("Added test fluid at world position %s"), *TestLocation.ToString());
 	}
 	
 	FluidActor->StartSimulation();
