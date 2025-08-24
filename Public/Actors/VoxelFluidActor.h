@@ -298,6 +298,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "New Static Water")
 	void OnTerrainEdited(const FVector& EditPosition, float EditRadius, float HeightChange);
 
+	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
+	void OnVoxelTerrainModified(const FVector& ModifiedPosition, float ModifiedRadius);
+
 	UFUNCTION(BlueprintCallable, Category = "New Static Water")
 	bool IsRegionActiveForSimulation(const FVector& Position) const;
 
@@ -319,8 +322,13 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
 	void RecenterOceanOnPlayer();
+	
+	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
+	void SpawnSimulationWaterAroundPlayer();
 
 private:
+	void ManageSimulationWaterAroundPlayer(const FVector& PlayerPos);
+	
 	TMap<FVector, float> FluidSources;
 	
 	void UpdateFluidSources(float DeltaTime);

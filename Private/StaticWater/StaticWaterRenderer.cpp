@@ -1,6 +1,7 @@
 #include "StaticWater/StaticWaterRenderer.h"
 #include "StaticWater/StaticWaterGenerator.h"
 #include "VoxelIntegration/VoxelFluidIntegration.h"
+#include "Actors/VoxelFluidActor.h"
 #include "ProceduralMeshComponent.h"
 #include "Engine/World.h"
 #include "Engine/Engine.h"
@@ -615,7 +616,10 @@ bool UStaticWaterRenderer::ShouldLoadRenderChunk(const FIntVector& ChunkCoord) c
 	const FVector ChunkCenter = RenderChunkCoordToWorldPosition(ChunkCoord) + 
 		FVector(RenderSettings.RenderChunkSize * 0.5f);
 	const float Distance = GetClosestViewerDistance(ChunkCenter);
-	return Distance <= RenderSettings.MaxRenderDistance;
+	
+	// Only load chunks that are in the ring between MinRenderDistance and MaxRenderDistance
+	// This creates a donut/ring of static water around the player
+	return Distance >= RenderSettings.MinRenderDistance && Distance <= RenderSettings.MaxRenderDistance;
 }
 
 bool UStaticWaterRenderer::ShouldUnloadRenderChunk(const FIntVector& ChunkCoord) const
@@ -630,6 +634,30 @@ void UStaticWaterRenderer::BuildChunkMesh(FStaticWaterRenderChunk& Chunk)
 		
 	if (!WaterGenerator || !Chunk.MeshComponent || !Chunk.MeshComponent->IsValidLowLevel())
 		return;
+	
+	// Check if there's active fluid simulation in this area
+	// If so, don't render static water (let the fluid simulation render instead)
+	if (AActor* Owner = GetOwner())
+	{
+		if (AVoxelFluidActor* FluidActor = Cast<AVoxelFluidActor>(Owner))
+		{
+			// Check if this region has active simulation
+			const FVector ChunkCenter = Chunk.WorldBounds.GetCenter();
+			if (FluidActor->IsRegionActiveForSimulation(ChunkCenter))
+			{
+				// Active simulation in this area, hide static water
+				Chunk.MeshComponent->ClearAllMeshSections();
+				Chunk.bHasWater = false;
+				
+				if (bEnableLogging)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Chunk (%d, %d) has active fluid simulation - hiding static water"), 
+						Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y);
+				}
+				return;
+			}
+		}
+	}
 		
 	const double StartTime = FPlatformTime::Seconds();
 	

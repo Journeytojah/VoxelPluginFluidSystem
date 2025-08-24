@@ -65,6 +65,10 @@ struct VOXELFLUIDSYSTEM_API FStaticWaterRenderSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (ClampMin = "1000", ClampMax = "10000"))
 	float RenderChunkSize = 6400.0f; // 64x64m render chunks for better performance
 
+	// Ring rendering settings - static water only renders between MinRenderDistance and MaxRenderDistance
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ring Rendering", meta = (ClampMin = "1000", ClampMax = "10000"))
+	float MinRenderDistance = 3000.0f; // Don't render static water closer than this (let simulation handle it)
+	
 	// LOD settings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LOD", meta = (ClampMin = "500", ClampMax = "15000"))
 	float LOD0Distance = 10000.0f; // Much larger for quality terrain-adaptive water

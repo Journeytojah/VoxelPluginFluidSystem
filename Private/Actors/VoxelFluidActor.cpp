@@ -1,6 +1,7 @@
 #include "Actors/VoxelFluidActor.h"
 #include "CellularAutomata/FluidChunkManager.h"
 #include "CellularAutomata/FluidChunk.h"
+#include "CellularAutomata/CAFluidGrid.h"
 #include "CellularAutomata/StaticWaterBody.h"
 #include "VoxelIntegration/VoxelFluidIntegration.h"
 #include "VoxelFluidStats.h"
@@ -183,16 +184,29 @@ void AVoxelFluidActor::BeginPlay()
 				CreateTestOcean();
 			}
 			
-			// Enable auto-tracking after a slight delay to ensure water region is set up
+			// Enable auto-tracking and start simulation after a slight delay  
 			FTimerHandle TrackingTimer;
 			GetWorld()->GetTimerManager().SetTimer(TrackingTimer, [this]()
 			{
+				// Make sure simulation is running
+				if (!bIsSimulating)
+				{
+					StartSimulation();
+					UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Started fluid simulation"));
+				}
+				
 				if (StaticWaterRenderer)
 				{
+					// Set the minimum render distance for the ring
+					StaticWaterRenderer->RenderSettings.MinRenderDistance = 3000.0f;
 					StaticWaterRenderer->EnableAutoTracking(true);
-					UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Auto-tracking enabled for static water"));
+					UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Auto-tracking enabled, min distance: %.1f"), 
+						StaticWaterRenderer->RenderSettings.MinRenderDistance);
 				}
-			}, 0.5f, false);
+				
+				// Spawn initial simulation water in the center area where static water doesn't render
+				SpawnSimulationWaterAroundPlayer();
+			}, 1.0f, false);
 			
 		}, 1.0f, false); // Wait 1 second for terrain to be ready
 	}
@@ -218,6 +232,39 @@ void AVoxelFluidActor::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	// Update water systems to follow player
+	static float WaterUpdateTimer = 0.0f;
+	WaterUpdateTimer += DeltaTime;
+	
+	if (WaterUpdateTimer > 0.5f) // Update every 0.5 seconds
+	{
+		WaterUpdateTimer = 0.0f;
+		
+		// Get current player position
+		FVector PlayerPos = FVector::ZeroVector;
+		if (UWorld* World = GetWorld())
+		{
+			if (APlayerController* PC = World->GetFirstPlayerController())
+			{
+				if (APawn* PlayerPawn = PC->GetPawn())
+				{
+					PlayerPos = PlayerPawn->GetActorLocation();
+					
+					// Update static water renderer to follow player
+					if (StaticWaterRenderer && StaticWaterRenderer->bAutoTrackPlayer)
+					{
+						// This already happens in StaticWaterRenderer's tick
+					}
+					
+					// Manage simulation water around player
+					if (bEnableStaticWater && ChunkManager)
+					{
+						ManageSimulationWaterAroundPlayer(PlayerPos);
+					}
+				}
+			}
+		}
+	}
 
 	if (bIsSimulating)
 	{
@@ -1514,21 +1561,117 @@ void AVoxelFluidActor::RemoveStaticWaterRegion(const FVector& Center, float Radi
 
 void AVoxelFluidActor::OnTerrainEdited(const FVector& EditPosition, float EditRadius, float HeightChange)
 {
-	// Notify static water generator about terrain changes
+	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: OnTerrainEdited called at %s (radius: %.1f, height change: %.1f)"), 
+		*EditPosition.ToString(), EditRadius, HeightChange);
+
+	// First, refresh the terrain data in the affected area
+	if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
+	{
+		VoxelIntegration->RefreshTerrainInRadius(EditPosition, EditRadius);
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Refreshed terrain data"));
+	}
+
+	// Check if there's static water at this location
+	bool bHasWater = false;
+	float WaterLevel = 0.0f;
 	if (StaticWaterGenerator)
 	{
+		bHasWater = StaticWaterGenerator->HasStaticWaterAtLocation(EditPosition);
+		if (bHasWater)
+		{
+			WaterLevel = StaticWaterGenerator->GetWaterLevelAtLocation(EditPosition);
+			UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Found static water at level %.1f"), WaterLevel);
+		}
+		
+		// Notify static water generator about terrain changes
 		const FBox ChangedBounds = FBox::BuildAABB(EditPosition, FVector(EditRadius));
 		StaticWaterGenerator->OnTerrainChanged(ChangedBounds);
 	}
 
-	// Trigger water activation if needed
+	// If there's water, spawn actual fluid simulation
+	if (bHasWater && ChunkManager)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Spawning fluid simulation for water flow"));
+		
+		// Make sure simulation is running
+		if (!bIsSimulating)
+		{
+			StartSimulation();
+			UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Started simulation for water flow"));
+		}
+		
+		// Create a grid of fluid spawn points above the edited area
+		const float SpawnSpacing = CellSize; // Use cell size for spacing
+		const int32 SpawnGridSize = FMath::CeilToInt(EditRadius * 2.0f / SpawnSpacing);
+		const float SpawnHeight = WaterLevel; // Spawn at water level
+		
+		int32 SpawnedCount = 0;
+		for (int32 X = -SpawnGridSize/2; X <= SpawnGridSize/2; ++X)
+		{
+			for (int32 Y = -SpawnGridSize/2; Y <= SpawnGridSize/2; ++Y)
+			{
+				const FVector SpawnPos = EditPosition + FVector(X * SpawnSpacing, Y * SpawnSpacing, 0);
+				
+				// Check distance from center
+				const float DistFromCenter = FVector::Dist2D(SpawnPos, EditPosition);
+				if (DistFromCenter <= EditRadius)
+				{
+					// Always spawn water above the edited area to ensure it flows down
+					// Spawn multiple layers to ensure good flow
+					for (int32 Z = 0; Z <= 5; ++Z)
+					{
+						FVector FluidSpawnPos = FVector(SpawnPos.X, SpawnPos.Y, WaterLevel + Z * CellSize);
+						
+						// Add full cells of fluid
+						const float FluidAmount = 1.0f;
+						AddFluidAtLocation(FluidSpawnPos, FluidAmount);
+						SpawnedCount++;
+					}
+				}
+			}
+		}
+		
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Spawned %d fluid cells for water flow"), SpawnedCount);
+		
+		// Also use the refill system for additional water if needed
+		RefillStaticWaterInRadius(EditPosition, EditRadius * 1.5f);
+	}
+
+	// Trigger water activation manager if needed (for region tracking)
 	if (WaterActivationManager)
 	{
 		WaterActivationManager->OnTerrainEdited(EditPosition, EditRadius, HeightChange);
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Terrain edited at %s (radius: %.1f, height change: %.1f)"), 
-		*EditPosition.ToString(), EditRadius, HeightChange);
+	// Force update the static water renderer to hide water in active simulation areas
+	if (StaticWaterRenderer)
+	{
+		StaticWaterRenderer->RebuildChunksInRadius(EditPosition, EditRadius * 2.0f);
+	}
+}
+
+void AVoxelFluidActor::OnVoxelTerrainModified(const FVector& ModifiedPosition, float ModifiedRadius)
+{
+	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: OnVoxelTerrainModified called at %s (radius: %.1f)"), 
+		*ModifiedPosition.ToString(), ModifiedRadius);
+	
+	// Call OnTerrainEdited with a default height change value
+	// In practice, you might want to calculate the actual height change
+	const float EstimatedHeightChange = 100.0f; // Assume significant change
+	OnTerrainEdited(ModifiedPosition, ModifiedRadius, EstimatedHeightChange);
+	
+	// Also notify the VoxelIntegration directly
+	if (VoxelIntegration)
+	{
+		const FBox ModifiedBounds = FBox::BuildAABB(ModifiedPosition, FVector(ModifiedRadius));
+		VoxelIntegration->OnVoxelTerrainModified(ModifiedBounds);
+	}
+	
+	// Force an immediate update of the static water renderer
+	if (StaticWaterRenderer)
+	{
+		StaticWaterRenderer->RebuildChunksInRadius(ModifiedPosition, ModifiedRadius);
+	}
 }
 
 bool AVoxelFluidActor::IsRegionActiveForSimulation(const FVector& Position) const
@@ -1685,5 +1828,187 @@ void AVoxelFluidActor::CreateTestOcean()
 void AVoxelFluidActor::RecenterOceanOnPlayer()
 {
 	CreateTestOcean(); // Just calls the same function which now centers on player
+}
+
+void AVoxelFluidActor::ManageSimulationWaterAroundPlayer(const FVector& PlayerPos)
+{
+	if (!ChunkManager || !StaticWaterGenerator)
+		return;
+	
+	// Check water level at player position
+	float WaterLevel = StaticWaterGenerator->GetWaterLevelAtLocation(PlayerPos);
+	if (!StaticWaterGenerator->HasStaticWaterAtLocation(PlayerPos))
+		return; // No water in this area
+	
+	// Define the radius where we want simulation water (inside the static water ring)
+	const float SimulationRadius = StaticWaterRenderer ? 
+		StaticWaterRenderer->RenderSettings.MinRenderDistance * 0.8f : 2000.0f;
+	
+	// Find all chunks within simulation radius
+	FBox SimulationBounds = FBox::BuildAABB(PlayerPos, FVector(SimulationRadius));
+	TArray<FFluidChunkCoord> NearbyChunks = ChunkManager->GetChunksInBounds(SimulationBounds);
+	
+	for (const FFluidChunkCoord& ChunkCoord : NearbyChunks)
+	{
+		UFluidChunk* Chunk = ChunkManager->GetChunk(ChunkCoord);
+		if (!Chunk)
+			continue;
+		
+		// Check if this chunk already has water
+		bool bHasWater = false;
+		for (const FCAFluidCell& Cell : Chunk->Cells)
+		{
+			if (Cell.FluidLevel > 0.1f)
+			{
+				bHasWater = true;
+				break;
+			}
+		}
+		
+		// If chunk doesn't have water but should, spawn it
+		if (!bHasWater)
+		{
+			FBox ChunkBounds = Chunk->GetWorldBounds();
+			FVector ChunkCenter = ChunkBounds.GetCenter();
+			
+			// Only spawn if within simulation radius
+			float DistFromPlayer = FVector::Dist(ChunkCenter, PlayerPos);
+			if (DistFromPlayer <= SimulationRadius)
+			{
+				// Spawn water in this chunk
+				const int32 CellsPerAxis = ChunkSize;
+				const float SpawnSpacing = CellSize;
+				
+				for (int32 X = 0; X < CellsPerAxis; X += 2) // Skip some cells for performance
+				{
+					for (int32 Y = 0; Y < CellsPerAxis; Y += 2)
+					{
+						FVector CellWorldPos = ChunkBounds.Min + FVector(X * SpawnSpacing, Y * SpawnSpacing, 0);
+						
+						// Sample terrain
+						float TerrainHeight = WaterLevel - 100.0f;
+						if (VoxelIntegration)
+						{
+							TerrainHeight = VoxelIntegration->SampleVoxelHeight(CellWorldPos.X, CellWorldPos.Y);
+						}
+						
+						// Spawn water if terrain is below water level
+						if (TerrainHeight < WaterLevel)
+						{
+							// Spawn at water level and a few cells below
+							for (int32 Z = 0; Z < 4; ++Z)
+							{
+								FVector SpawnPos = FVector(CellWorldPos.X, CellWorldPos.Y, WaterLevel - Z * CellSize);
+								if (SpawnPos.Z > TerrainHeight + CellSize/2)
+								{
+									ChunkManager->AddFluidAtWorldPosition(SpawnPos, 1.0f);
+								}
+							}
+						}
+					}
+				}
+				
+				UE_LOG(LogTemp, VeryVerbose, TEXT("VoxelFluidActor: Spawned water in chunk at %s"), *ChunkCenter.ToString());
+			}
+		}
+	}
+}
+
+void AVoxelFluidActor::SpawnSimulationWaterAroundPlayer()
+{
+	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("VoxelFluidActor: ChunkManager not initialized"));
+		return;
+	}
+
+	// Get current player position
+	FVector PlayerPos = FVector::ZeroVector;
+	if (UWorld* World = GetWorld())
+	{
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			if (APawn* PlayerPawn = PC->GetPawn())
+			{
+				PlayerPos = PlayerPawn->GetActorLocation();
+			}
+		}
+	}
+
+	// Make sure simulation is running
+	if (!bIsSimulating)
+	{
+		StartSimulation();
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Started simulation for water spawning"));
+	}
+
+	// Get water level from static water generator
+	float WaterLevel = OceanWaterLevel;
+	if (StaticWaterGenerator)
+	{
+		WaterLevel = StaticWaterGenerator->GetWaterLevelAtLocation(PlayerPos);
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Spawning simulation water around player at %s, water level: %.1f"), 
+		*PlayerPos.ToString(), WaterLevel);
+
+	// Spawn water in a radius around the player (within MinRenderDistance of static water)
+	// We want to fill the "hole" in the donut where static water doesn't render
+	const float SpawnRadius = StaticWaterRenderer ? StaticWaterRenderer->RenderSettings.MinRenderDistance * 0.9f : 2000.0f;
+	const float SpawnSpacing = CellSize * 2.0f; // Space out the spawns
+	const int32 GridSize = FMath::CeilToInt(SpawnRadius * 2.0f / SpawnSpacing);
+	
+	int32 SpawnedCount = 0;
+	int32 SkippedAboveTerrain = 0;
+	
+	for (int32 X = -GridSize/2; X <= GridSize/2; ++X)
+	{
+		for (int32 Y = -GridSize/2; Y <= GridSize/2; ++Y)
+		{
+			const FVector SpawnPos = PlayerPos + FVector(X * SpawnSpacing, Y * SpawnSpacing, 0);
+			const float DistFromPlayer = FVector::Dist2D(SpawnPos, PlayerPos);
+			
+			// Only spawn within radius
+			if (DistFromPlayer <= SpawnRadius)
+			{
+				// Sample terrain height
+				float TerrainHeight = WaterLevel - 100.0f; // Default below water
+				if (VoxelIntegration)
+				{
+					TerrainHeight = VoxelIntegration->SampleVoxelHeight(SpawnPos.X, SpawnPos.Y);
+				}
+				
+				// Only spawn where water should exist (terrain below water level)
+				if (TerrainHeight < WaterLevel)
+				{
+					// Spawn water at water level
+					FVector FluidSpawnPos = FVector(SpawnPos.X, SpawnPos.Y, WaterLevel);
+					
+					// Add fluid
+					const float FluidAmount = 1.0f; // Full cell
+					AddFluidAtLocation(FluidSpawnPos, FluidAmount);
+					SpawnedCount++;
+					
+					// Also add some below for depth (up to 3 cells deep)
+					for (int32 Z = 1; Z <= 3; ++Z)
+					{
+						FVector BelowPos = FluidSpawnPos - FVector(0, 0, Z * CellSize);
+						if (BelowPos.Z > TerrainHeight + CellSize/2) // Make sure we're above terrain
+						{
+							AddFluidAtLocation(BelowPos, FluidAmount);
+							SpawnedCount++;
+						}
+					}
+				}
+				else
+				{
+					SkippedAboveTerrain++;
+				}
+			}
+		}
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Spawned %d fluid cells around player (skipped %d above terrain)"), 
+		SpawnedCount, SkippedAboveTerrain);
 }
 
