@@ -718,8 +718,9 @@ void UStaticWaterRenderer::BuildChunkMesh(FStaticWaterRenderChunk& Chunk)
 
 void UStaticWaterRenderer::GenerateWaterSurface(FStaticWaterRenderChunk& Chunk)
 {
-	// For now, generate a simple planar water surface
-	// TODO: Implement adaptive mesh generation based on terrain
+	// Generate water surface based on LOD level
+	// LOD0 uses adaptive mesh that culls triangles above terrain
+	// Higher LODs use simple planar mesh for performance
 	
 	const float WaterLevel = WaterGenerator->GetWaterLevelAtLocation(Chunk.WorldBounds.GetCenter());
 	
@@ -818,12 +819,13 @@ void UStaticWaterRenderer::GeneratePlanarWaterMesh(FStaticWaterRenderChunk& Chun
 
 void UStaticWaterRenderer::GenerateAdaptiveWaterMesh(FStaticWaterRenderChunk& Chunk)
 {
-	// Generate terrain-adaptive water mesh that follows landscape contours
+	// Generate terrain-adaptive water mesh that culls triangles above terrain
 	const FBox& Bounds = Chunk.WorldBounds;
 	const float Resolution = RenderSettings.MeshResolution;
 	const float WaterLevel = Chunk.WaterLevel;
 	
-	const int32 VertsPerSide = FMath::Max(8, FMath::CeilToInt(RenderSettings.RenderChunkSize / Resolution)); // Higher resolution for LOD0
+	// Use higher resolution for LOD0 adaptive meshes
+	const int32 VertsPerSide = FMath::Max(16, FMath::CeilToInt(RenderSettings.RenderChunkSize / Resolution));
 	const float StepSize = RenderSettings.RenderChunkSize / (VertsPerSide - 1);
 	
 	if (bEnableLogging)
@@ -832,13 +834,14 @@ void UStaticWaterRenderer::GenerateAdaptiveWaterMesh(FStaticWaterRenderChunk& Ch
 			WaterLevel, VertsPerSide, StepSize);
 	}
 	
-	// Sample terrain heights and create vertices only where water should be visible
+	// Create arrays for mesh data
 	TArray<FVector> TempVertices;
 	TArray<int32> TempTriangles;
 	TArray<FVector> TempNormals;
 	TArray<FVector2D> TempUVs;
+	TArray<float> VertexTerrainHeights;
 	
-	// Create a grid of potential vertices, but only add those above terrain and below water level
+	// Create a regular grid of vertices - always create all vertices for proper UV mapping
 	for (int32 Y = 0; Y < VertsPerSide; ++Y)
 	{
 		for (int32 X = 0; X < VertsPerSide; ++X)
@@ -846,126 +849,70 @@ void UStaticWaterRenderer::GenerateAdaptiveWaterMesh(FStaticWaterRenderChunk& Ch
 			const float WorldX = Bounds.Min.X + X * StepSize;
 			const float WorldY = Bounds.Min.Y + Y * StepSize;
 			
-			// Sample terrain height at this position using VoxelIntegration
+			// Sample terrain height at this vertex position
 			float TerrainHeight = WaterLevel - 100.0f; // Default to below water if no terrain data
 			if (VoxelIntegration && VoxelIntegration->IsValidLowLevel())
 			{
 				TerrainHeight = VoxelIntegration->SampleVoxelHeight(WorldX, WorldY);
 			}
 			
-			// Only create water surface where terrain is below water level
-			if (TerrainHeight < WaterLevel)
+			// Store the terrain height for later use when creating triangles
+			VertexTerrainHeights.Add(TerrainHeight);
+			
+			// Water surface is always at water level (flat ocean surface)
+			const float WaterSurfaceHeight = WaterLevel;
+			
+			TempVertices.Add(FVector(WorldX, WorldY, WaterSurfaceHeight));
+			TempUVs.Add(FVector2D((float)X / (VertsPerSide - 1), (float)Y / (VertsPerSide - 1)));
+			TempNormals.Add(FVector(0, 0, 1));
+		}
+	}
+	
+	// Generate triangle indices only where water should be visible
+	for (int32 Y = 0; Y < VertsPerSide - 1; ++Y)
+	{
+		for (int32 X = 0; X < VertsPerSide - 1; ++X)
+		{
+			const int32 VertIndex = Y * VertsPerSide + X;
+			const int32 NextRowIndex = VertIndex + VertsPerSide;
+			
+			// Check if any of the quad's vertices have terrain below water level
+			const float TerrainHeight1 = VertexTerrainHeights[VertIndex];
+			const float TerrainHeight2 = VertexTerrainHeights[VertIndex + 1];
+			const float TerrainHeight3 = VertexTerrainHeights[NextRowIndex];
+			const float TerrainHeight4 = VertexTerrainHeights[NextRowIndex + 1];
+			
+			// Only create triangles if at least one corner is underwater
+			const bool bHasWater = (TerrainHeight1 < WaterLevel) || (TerrainHeight2 < WaterLevel) ||
+			                       (TerrainHeight3 < WaterLevel) || (TerrainHeight4 < WaterLevel);
+			
+			if (bHasWater)
 			{
-				// Create vertex at water level (this will later be improved to follow terrain contours better)
-				FVector WaterVertex(WorldX, WorldY, WaterLevel);
-				TempVertices.Add(WaterVertex);
+				// Create two triangles per quad
+				// Triangle 1
+				TempTriangles.Add(VertIndex);
+				TempTriangles.Add(NextRowIndex);
+				TempTriangles.Add(VertIndex + 1);
 				
-				// UV mapping
-				const float U = (float)X / (VertsPerSide - 1);
-				const float V = (float)Y / (VertsPerSide - 1);
-				TempUVs.Add(FVector2D(U, V));
-				
-				// Normal pointing up
-				TempNormals.Add(FVector(0, 0, 1));
+				// Triangle 2  
+				TempTriangles.Add(VertIndex + 1);
+				TempTriangles.Add(NextRowIndex);
+				TempTriangles.Add(NextRowIndex + 1);
 			}
 		}
 	}
 	
-	// Generate triangles for the water surface
-	// For now, create a simple grid - this can be improved later for better terrain adaptation
-	if (TempVertices.Num() >= 4) // Need at least 4 vertices to make triangles
+	// Store the generated mesh data
+	Chunk.Vertices = TempVertices;
+	Chunk.Triangles = TempTriangles;
+	Chunk.Normals = TempNormals;
+	Chunk.UVs = TempUVs;
+	Chunk.bHasWater = TempTriangles.Num() > 0; // Only has water if we have triangles
+	
+	if (bEnableLogging)
 	{
-		// Create a simple quad grid
-		const int32 QuadsPerSide = FMath::Max(1, VertsPerSide / 4); // Simpler grid for now
-		const float QuadStepSize = RenderSettings.RenderChunkSize / QuadsPerSide;
-		
-		TempVertices.Empty();
-		TempUVs.Empty();
-		TempNormals.Empty();
-		
-		// Store terrain heights for each vertex so we can check when creating triangles
-		TArray<float> VertexTerrainHeights;
-		
-		// Rebuild vertices for quad grid with terrain-adaptive heights
-		for (int32 Y = 0; Y <= QuadsPerSide; ++Y)
-		{
-			for (int32 X = 0; X <= QuadsPerSide; ++X)
-			{
-				const float WorldX = Bounds.Min.X + X * QuadStepSize;
-				const float WorldY = Bounds.Min.Y + Y * QuadStepSize;
-				
-				// Sample terrain height at this vertex position
-				float TerrainHeight = WaterLevel - 100.0f; // Fallback if no VoxelIntegration
-				if (VoxelIntegration && VoxelIntegration->IsValidLowLevel())
-				{
-					TerrainHeight = VoxelIntegration->SampleVoxelHeight(WorldX, WorldY);
-				}
-				
-				// Store the terrain height for later use when creating triangles
-				VertexTerrainHeights.Add(TerrainHeight);
-				
-				// Water surface is always at water level (flat ocean surface)
-				const float WaterSurfaceHeight = WaterLevel;
-				
-				TempVertices.Add(FVector(WorldX, WorldY, WaterSurfaceHeight));
-				TempUVs.Add(FVector2D((float)X / QuadsPerSide, (float)Y / QuadsPerSide));
-				TempNormals.Add(FVector(0, 0, 1));
-			}
-		}
-		
-		// Generate triangle indices only where water should be visible
-		for (int32 Y = 0; Y < QuadsPerSide; ++Y)
-		{
-			for (int32 X = 0; X < QuadsPerSide; ++X)
-			{
-				const int32 VertIndex = Y * (QuadsPerSide + 1) + X;
-				const int32 NextRowIndex = VertIndex + (QuadsPerSide + 1);
-				
-				// Check if any of the quad's vertices have terrain below water level
-				const float TerrainHeight1 = VertexTerrainHeights[VertIndex];
-				const float TerrainHeight2 = VertexTerrainHeights[VertIndex + 1];
-				const float TerrainHeight3 = VertexTerrainHeights[NextRowIndex];
-				const float TerrainHeight4 = VertexTerrainHeights[NextRowIndex + 1];
-				
-				// Only create triangles if at least one corner is underwater
-				const bool bHasWater = (TerrainHeight1 < WaterLevel) || (TerrainHeight2 < WaterLevel) ||
-				                       (TerrainHeight3 < WaterLevel) || (TerrainHeight4 < WaterLevel);
-				
-				if (bHasWater)
-				{
-					// Create two triangles per quad
-					// Triangle 1
-					TempTriangles.Add(VertIndex);
-					TempTriangles.Add(NextRowIndex);
-					TempTriangles.Add(VertIndex + 1);
-					
-					// Triangle 2  
-					TempTriangles.Add(VertIndex + 1);
-					TempTriangles.Add(NextRowIndex);
-					TempTriangles.Add(NextRowIndex + 1);
-				}
-			}
-		}
-		
-		// Store the generated mesh data
-		Chunk.Vertices = TempVertices;
-		Chunk.Triangles = TempTriangles;
-		Chunk.Normals = TempNormals;
-		Chunk.UVs = TempUVs;
-		Chunk.bHasWater = true;
-		
-		if (bEnableLogging)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Generated ADAPTIVE mesh with %d vertices, %d triangles"), 
-				TempVertices.Num(), TempTriangles.Num() / 3);
-		}
-	}
-	else
-	{
-		if (bEnableLogging)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: No adaptive mesh generated - insufficient vertices"));
-		}
+		UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Generated ADAPTIVE mesh with %d vertices, %d triangles"), 
+			TempVertices.Num(), TempTriangles.Num() / 3);
 	}
 }
 
