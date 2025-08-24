@@ -166,13 +166,13 @@ public:
 
 	// Static Water Properties
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water")
-	bool bEnableStaticWater = false;
+	bool bEnableStaticWater = true;
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water")
 	bool bShowStaticWaterBounds = false;
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water", meta = (EditCondition = "bEnableStaticWater"))
-	bool bAutoCreateOcean = false;
+	bool bAutoCreateOcean = true;
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water", meta = (EditCondition = "bAutoCreateOcean"))
 	float OceanWaterLevel = 0.0f;

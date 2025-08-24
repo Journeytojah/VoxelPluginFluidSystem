@@ -96,10 +96,16 @@ void AVoxelFluidActor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// Ensure ocean water level is reasonable (not at exact ground level)
+	// Ensure StaticWaterManager exists (needed for Blueprint-derived actors)
+	if (!StaticWaterManager)
+	{
+		StaticWaterManager = NewObject<UStaticWaterManager>(this, UStaticWaterManager::StaticClass(), TEXT("StaticWaterManager"));
+	}
+
+	// Ensure ocean water level is at a reasonable height (below typical terrain)
 	if (OceanWaterLevel >= 0.0f)
 	{
-		OceanWaterLevel = -500.0f; // Slightly below typical terrain
+		OceanWaterLevel = -500.0f; // Set below terrain to avoid floating water
 	}
 
 	InitializeFluidSystem();
@@ -115,6 +121,15 @@ void AVoxelFluidActor::BeginPlay()
 		FTimerHandle TimerHandle;
 		GetWorld()->GetTimerManager().SetTimer(TimerHandle, [this]()
 		{
+			// Force load chunks around the player first
+			if (ChunkManager)
+			{
+				TArray<FVector> ViewerPositions = GetViewerPositions();
+				
+				// Force an update to load chunks
+				ChunkManager->UpdateChunks(0.1f, ViewerPositions);
+			}
+			
 			// Clear any existing static water first
 			if (StaticWaterManager)
 			{
@@ -299,7 +314,11 @@ void AVoxelFluidActor::InitializeFluidSystem()
 								}
 
 								// Now apply static water (it will also check bIsSolid)
-								StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk, ChunkManager);
+								FBox ChunkBounds = Chunk->GetWorldBounds();
+								if (StaticWaterManager->ChunkIntersectsStaticWater(ChunkBounds))
+								{
+									StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk, ChunkManager);
+								}
 							}
 							else
 							{
@@ -1006,6 +1025,7 @@ void AVoxelFluidActor::CreateOcean(float WaterLevel, float Size)
 		FVector(-Size, -Size, WaterLevel - 10000.0f),
 		FVector(Size, Size, WaterLevel)
 	);
+	
 
 	StaticWaterManager->CreateOcean(WaterLevel, OceanBounds);
 
@@ -1101,6 +1121,7 @@ void AVoxelFluidActor::ApplyStaticWaterToAllChunks()
 
 	TArray<UFluidChunk*> AllChunks = ChunkManager->GetActiveChunks();
 	int32 AppliedCount = 0;
+	int32 SkippedCount = 0;
 
 	for (UFluidChunk* Chunk : AllChunks)
 	{
@@ -1119,9 +1140,12 @@ void AVoxelFluidActor::ApplyStaticWaterToAllChunks()
 				StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk, ChunkManager);
 				AppliedCount++;
 			}
+			else
+			{
+				SkippedCount++;
+			}
 		}
 	}
-
 }
 
 bool AVoxelFluidActor::IsPointInStaticWater(const FVector& WorldPosition) const
