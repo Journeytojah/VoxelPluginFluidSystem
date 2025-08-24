@@ -6,6 +6,9 @@
 #include "VoxelFluidStats.h"
 #include "VoxelFluidDebug.h"
 #include "Visualization/FluidVisualizationComponent.h"
+#include "StaticWater/StaticWaterGenerator.h"
+#include "StaticWater/StaticWaterRenderer.h"
+#include "StaticWater/WaterActivationManager.h"
 #include "Components/BoxComponent.h"
 #include "Components/BillboardComponent.h"
 #include "DrawDebugHelpers.h"
@@ -62,6 +65,11 @@ AVoxelFluidActor::AVoxelFluidActor()
 
 	StaticWaterManager = CreateDefaultSubobject<UStaticWaterManager>(TEXT("StaticWaterManager"));
 
+	// Create new static water system components
+	StaticWaterGenerator = CreateDefaultSubobject<UStaticWaterGenerator>(TEXT("StaticWaterGenerator"));
+	StaticWaterRenderer = CreateDefaultSubobject<UStaticWaterRenderer>(TEXT("StaticWaterRenderer"));
+	WaterActivationManager = CreateDefaultSubobject<UWaterActivationManager>(TEXT("WaterActivationManager"));
+
 	ChunkSize = 32;
 	CellSize = 100.0f;
 	ChunkLoadDistance = 8000.0f;
@@ -102,6 +110,20 @@ void AVoxelFluidActor::BeginPlay()
 		StaticWaterManager = NewObject<UStaticWaterManager>(this, UStaticWaterManager::StaticClass(), TEXT("StaticWaterManager"));
 	}
 
+	// Initialize new static water system components if they don't exist
+	if (!StaticWaterGenerator)
+	{
+		StaticWaterGenerator = NewObject<UStaticWaterGenerator>(this, UStaticWaterGenerator::StaticClass(), TEXT("StaticWaterGenerator"));
+	}
+	if (!StaticWaterRenderer)
+	{
+		StaticWaterRenderer = NewObject<UStaticWaterRenderer>(this, UStaticWaterRenderer::StaticClass(), TEXT("StaticWaterRenderer"));
+	}
+	if (!WaterActivationManager)
+	{
+		WaterActivationManager = NewObject<UWaterActivationManager>(this, UWaterActivationManager::StaticClass(), TEXT("WaterActivationManager"));
+	}
+
 	// Ensure ocean water level is at a reasonable height (below typical terrain)
 	if (OceanWaterLevel >= 0.0f)
 	{
@@ -110,17 +132,42 @@ void AVoxelFluidActor::BeginPlay()
 
 	InitializeFluidSystem();
 
+	// Connect new static water systems
+	if (StaticWaterGenerator && TargetVoxelWorld)
+	{
+		StaticWaterGenerator->SetVoxelWorld(TargetVoxelWorld);
+	}
+	if (StaticWaterRenderer && StaticWaterGenerator)
+	{
+		StaticWaterRenderer->SetWaterGenerator(StaticWaterGenerator);
+	}
+	if (StaticWaterRenderer && VoxelIntegration)
+	{
+		StaticWaterRenderer->SetVoxelIntegration(VoxelIntegration);
+	}
+	if (WaterActivationManager)
+	{
+		WaterActivationManager->SetStaticWaterGenerator(StaticWaterGenerator);
+		WaterActivationManager->SetStaticWaterRenderer(StaticWaterRenderer);
+		WaterActivationManager->SetFluidChunkManager(ChunkManager);
+		// FluidGrid is not used in this system currently
+		// WaterActivationManager->SetFluidGrid(FluidGrid);
+	}
+
 	if (bAutoStart)
 	{
 		StartSimulation();
 	}
 
-	// Create ocean after terrain system is initialized
-	if (bEnableStaticWater && bAutoCreateOcean)
+	// Set up the new static water system after terrain system is initialized
+	if (bEnableStaticWater)
 	{
 		FTimerHandle TimerHandle;
 		GetWorld()->GetTimerManager().SetTimer(TimerHandle, [this]()
 		{
+			// Setup the test water system first (enables debug vis and logging)
+			SetupTestWaterSystem();
+			
 			// Force load chunks around the player first
 			if (ChunkManager)
 			{
@@ -130,14 +177,23 @@ void AVoxelFluidActor::BeginPlay()
 				ChunkManager->UpdateChunks(0.1f, ViewerPositions);
 			}
 			
-			// Clear any existing static water first
-			if (StaticWaterManager)
+			// Create ocean using the new static water system
+			if (bAutoCreateOcean)
 			{
-				StaticWaterManager->ClearAllStaticWaterRegions();
+				CreateTestOcean();
 			}
-
-			// Now create ocean with proper level
-			CreateOcean(OceanWaterLevel, OceanSize);
+			
+			// Enable auto-tracking after a slight delay to ensure water region is set up
+			FTimerHandle TrackingTimer;
+			GetWorld()->GetTimerManager().SetTimer(TrackingTimer, [this]()
+			{
+				if (StaticWaterRenderer)
+				{
+					StaticWaterRenderer->EnableAutoTracking(true);
+					UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Auto-tracking enabled for static water"));
+				}
+			}, 0.5f, false);
+			
 		}, 1.0f, false); // Wait 1 second for terrain to be ready
 	}
 
@@ -431,6 +487,12 @@ void AVoxelFluidActor::AddFluidAtLocation(const FVector& WorldPosition, float Am
 {
 	// Apply accumulation and density multiplier
 	const float AdjustedAmount = Amount * FluidDensityMultiplier * (1.0f + FluidAccumulation);
+
+	// Notify water activation manager about fluid being added
+	if (WaterActivationManager && AdjustedAmount > 0.0f)
+	{
+		WaterActivationManager->OnFluidAdded(WorldPosition, AdjustedAmount);
+	}
 
 	if (ChunkManager)
 	{
@@ -1415,5 +1477,213 @@ void AVoxelFluidActor::TestTerrainRefreshAtLocation(const FVector& Location, flo
 
 	// Now test the static water refill
 	RefillStaticWaterInRadius(Location, Radius);
+}
+
+// New Static Water System Function Implementations
+
+void AVoxelFluidActor::AddStaticWaterRegion(const FVector& Center, float Radius, float WaterLevel)
+{
+	if (!StaticWaterGenerator)
+		return;
+
+	FStaticWaterRegionDef NewRegion;
+	const FVector RegionSize = FVector(Radius * 2.0f, Radius * 2.0f, 2000.0f);
+	NewRegion.Bounds = FBox::BuildAABB(Center, RegionSize * 0.5f);
+	NewRegion.WaterLevel = WaterLevel;
+	NewRegion.bInfiniteDepth = false;
+	NewRegion.MinDepth = 100.0f;
+	NewRegion.Priority = 0;
+
+	StaticWaterGenerator->AddWaterRegion(NewRegion);
+
+	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Added static water region at %s (radius: %.1f, level: %.1f)"), 
+		*Center.ToString(), Radius, WaterLevel);
+}
+
+void AVoxelFluidActor::RemoveStaticWaterRegion(const FVector& Center, float Radius)
+{
+	if (!StaticWaterGenerator)
+		return;
+
+	// For now, clear all regions and let user re-add the ones they want
+	// TODO: Implement region-specific removal based on position
+	StaticWaterGenerator->ClearAllWaterRegions();
+
+	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Cleared static water regions"));
+}
+
+void AVoxelFluidActor::OnTerrainEdited(const FVector& EditPosition, float EditRadius, float HeightChange)
+{
+	// Notify static water generator about terrain changes
+	if (StaticWaterGenerator)
+	{
+		const FBox ChangedBounds = FBox::BuildAABB(EditPosition, FVector(EditRadius));
+		StaticWaterGenerator->OnTerrainChanged(ChangedBounds);
+	}
+
+	// Trigger water activation if needed
+	if (WaterActivationManager)
+	{
+		WaterActivationManager->OnTerrainEdited(EditPosition, EditRadius, HeightChange);
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Terrain edited at %s (radius: %.1f, height change: %.1f)"), 
+		*EditPosition.ToString(), EditRadius, HeightChange);
+}
+
+bool AVoxelFluidActor::IsRegionActiveForSimulation(const FVector& Position) const
+{
+	if (!WaterActivationManager)
+		return false;
+
+	return WaterActivationManager->IsRegionActive(Position);
+}
+
+void AVoxelFluidActor::ForceActivateWaterAtLocation(const FVector& Position, float Radius)
+{
+	if (!WaterActivationManager)
+		return;
+
+	const bool bSuccess = WaterActivationManager->ActivateWaterInRegion(Position, Radius);
+	
+	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: %s water activation at %s (radius: %.1f)"), 
+		bSuccess ? TEXT("Successful") : TEXT("Failed"), *Position.ToString(), Radius);
+}
+
+void AVoxelFluidActor::ForceDeactivateAllWaterRegions()
+{
+	if (!WaterActivationManager)
+		return;
+
+	WaterActivationManager->ForceDeactivateAllRegions();
+	
+	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Deactivated all water regions"));
+}
+
+int32 AVoxelFluidActor::GetActiveWaterRegionCount() const
+{
+	if (!WaterActivationManager)
+		return 0;
+
+	return WaterActivationManager->GetActiveRegionCount();
+}
+
+void AVoxelFluidActor::SetupTestWaterSystem()
+{
+	if (!StaticWaterGenerator || !StaticWaterRenderer)
+	{
+		UE_LOG(LogTemp, Error, TEXT("VoxelFluidActor: Static water components not initialized"));
+		return;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Setting up test water system..."));
+
+	// Enable debug visualization
+	StaticWaterGenerator->bShowTileBounds = true;
+	StaticWaterGenerator->bShowWaterRegions = true;
+	StaticWaterRenderer->bShowRenderChunkBounds = true;
+	
+	// Enable logging for debugging
+	StaticWaterGenerator->bEnableLogging = true;
+	StaticWaterRenderer->bEnableLogging = true;
+	if (WaterActivationManager)
+	{
+		WaterActivationManager->bEnableLogging = true;
+		WaterActivationManager->bShowActiveRegions = true;
+	}
+
+	// Force connection between generator and renderer
+	StaticWaterRenderer->SetWaterGenerator(StaticWaterGenerator);
+	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Connected renderer to generator"));
+
+	// Create a simple test ocean around the player
+	if (UWorld* World = GetWorld())
+	{
+		FVector PlayerPos = FVector::ZeroVector;
+		if (APawn* PlayerPawn = World->GetFirstPlayerController()->GetPawn())
+		{
+			PlayerPos = PlayerPawn->GetActorLocation();
+		}
+
+		// Create ocean at a reasonable level relative to terrain
+		float OceanLevel = -100.0f; // Fixed ocean level instead of relative to player
+		AddStaticWaterRegion(PlayerPos, 10000.0f, OceanLevel);
+		
+		// Completely reset the renderer and set new viewer position
+		StaticWaterRenderer->ResetRenderer();
+		StaticWaterRenderer->SetViewerPosition(PlayerPos);
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Reset renderer and set viewer position to %s"), *PlayerPos.ToString());
+		
+		// Force immediate update of render chunks - this is key!
+		StaticWaterRenderer->SetComponentTickEnabled(true);
+		StaticWaterRenderer->RegenerateAroundViewer();
+		
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Forced renderer regeneration at player position"));
+		
+		// Re-enable auto-tracking so the water follows the player as they move
+		StaticWaterRenderer->EnableAutoTracking(true);
+		
+		// Wait a frame then enable auto tracking to ensure the initial setup completes
+		FTimerHandle TimerHandle;
+		GetWorldTimerManager().SetTimer(TimerHandle, [this]()
+		{
+			if (StaticWaterRenderer)
+			{
+				StaticWaterRenderer->EnableAutoTracking(true);
+				UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Auto-tracking re-enabled via timer"));
+			}
+		}, 0.1f, false);
+		
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Test water system setup complete - Ocean at %s, Level: %.1f (auto-tracking enabled)"), 
+			*PlayerPos.ToString(), OceanLevel);
+	}
+}
+
+void AVoxelFluidActor::CreateTestOcean()
+{
+	if (!StaticWaterGenerator)
+	{
+		UE_LOG(LogTemp, Error, TEXT("VoxelFluidActor: StaticWaterGenerator not initialized"));
+		return;
+	}
+
+	// Clear existing regions
+	StaticWaterGenerator->ClearAllWaterRegions();
+	
+	// Get current player position for ocean center
+	FVector PlayerPos = FVector::ZeroVector;
+	if (UWorld* World = GetWorld())
+	{
+		if (APawn* PlayerPawn = World->GetFirstPlayerController()->GetPawn())
+		{
+			PlayerPos = PlayerPawn->GetActorLocation();
+		}
+	}
+	
+	// Create a massive ocean centered on player with reasonable water level
+	FStaticWaterRegionDef Ocean;
+	Ocean.Bounds = FBox(PlayerPos + FVector(-100000, -100000, -2000), PlayerPos + FVector(100000, 100000, 500));
+	Ocean.WaterLevel = -100.0f;  // Fixed ocean level
+	Ocean.bInfiniteDepth = true;
+	Ocean.MinDepth = 500.0f;
+	Ocean.Priority = 0;
+
+	StaticWaterGenerator->AddWaterRegion(Ocean);
+	
+	// Set renderer viewer position
+	if (StaticWaterRenderer)
+	{
+		StaticWaterRenderer->SetViewerPosition(PlayerPos);
+	}
+	
+	// Force regeneration
+	StaticWaterGenerator->ForceRegenerateAll();
+	
+	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Created massive ocean centered at %s, water level: -100"), *PlayerPos.ToString());
+}
+
+void AVoxelFluidActor::RecenterOceanOnPlayer()
+{
+	CreateTestOcean(); // Just calls the same function which now centers on player
 }
 
