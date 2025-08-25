@@ -97,6 +97,17 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 		SET_DWORD_STAT(STAT_VoxelFluid_StateChangesPerFrame, LoadQueueBefore + UnloadQueueBefore);
 	}
 
+	// Check for settled chunks if using edit-triggered activation
+	if (StreamingConfig.ActivationMode != EChunkActivationMode::DistanceBased)
+	{
+		SettledChunkCheckTimer += DeltaTime;
+		if (SettledChunkCheckTimer >= SettledChunkCheckInterval)
+		{
+			SettledChunkCheckTimer = 0.0f;
+			CheckForSettledChunks();
+		}
+	}
+
 	StatsUpdateTimer += DeltaTime;
 	if (StatsUpdateTimer >= 1.0f)
 	{
@@ -743,6 +754,12 @@ void UFluidChunkManager::UpdateChunkStates(const TArray<FVector>& ViewerPosition
 	TSet<FFluidChunkCoord> ChunksToLoad;
 	TSet<FFluidChunkCoord> ChunksToUnload;
 
+	// In edit-triggered mode, we only load/activate chunks that have been explicitly triggered
+	bool bShouldLoadByDistance = (StreamingConfig.ActivationMode == EChunkActivationMode::DistanceBased ||
+								   StreamingConfig.ActivationMode == EChunkActivationMode::Hybrid);
+	bool bShouldActivateByDistance = (StreamingConfig.ActivationMode == EChunkActivationMode::DistanceBased ||
+									   StreamingConfig.ActivationMode == EChunkActivationMode::Hybrid);
+
 	for (const FVector& ViewerPos : ViewerPositions)
 	{
 		const float ChunkWorldSize = ChunkSize * CellSize;
@@ -762,8 +779,14 @@ void UFluidChunkManager::UpdateChunkStates(const TArray<FVector>& ViewerPosition
 
 					if (Distance <= StreamingConfig.ActiveDistance)
 					{
-						ChunksToActivate.Add(Coord);
-						if (!IsChunkLoaded(Coord))
+						// Only activate by distance if mode allows it
+						if (bShouldActivateByDistance)
+						{
+							ChunksToActivate.Add(Coord);
+						}
+						
+						// Only load chunks by distance if not in pure edit-triggered mode
+						if (bShouldLoadByDistance && !IsChunkLoaded(Coord))
 						{
 							ChunksToLoad.Add(Coord);
 						}
@@ -805,7 +828,21 @@ void UFluidChunkManager::UpdateChunkStates(const TArray<FVector>& ViewerPosition
 		}
 		else if (Distance > StreamingConfig.ActiveDistance && ActiveChunkCoords.Contains(Coord))
 		{
-			ChunksToDeactivate.Add(Coord);
+			// In edit-triggered mode, don't deactivate edit-activated chunks based on distance
+			if (StreamingConfig.ActivationMode == EChunkActivationMode::EditTriggered)
+			{
+				if (!IsChunkEditActivated(Coord))
+				{
+					// This chunk was somehow activated but not by edits, deactivate it
+					ChunksToDeactivate.Add(Coord);
+				}
+				// Edit-activated chunks are handled by CheckForSettledChunks()
+			}
+			else
+			{
+				// Normal distance-based deactivation
+				ChunksToDeactivate.Add(Coord);
+			}
 		}
 	}
 
@@ -2086,5 +2123,168 @@ bool UFluidChunkManager::ShouldUpdateChunk(UFluidChunk* Chunk) const
 	// Update chunks that haven't been updated recently
 	float TimeSinceLastUpdate = GetWorld() ? GetWorld()->GetTimeSeconds() - Chunk->LastUpdateTime : 0.0f;
 	return TimeSinceLastUpdate > 0.033f; // Update at least every 33ms (30 FPS)
+}
+
+// ==================== Edit-Triggered Activation Methods ====================
+
+void UFluidChunkManager::OnVoxelEditOccurred(const FVector& EditLocation, float EditRadius)
+{
+	// Only process if we're using edit-triggered activation
+	if (StreamingConfig.ActivationMode == EChunkActivationMode::DistanceBased)
+	{
+		return;
+	}
+
+	// Activate chunks in the edit radius
+	ActivateChunksForEdit(EditLocation, EditRadius);
+}
+
+void UFluidChunkManager::OnVoxelEditOccurredInBounds(const FBox& EditBounds)
+{
+	// Only process if we're using edit-triggered activation
+	if (StreamingConfig.ActivationMode == EChunkActivationMode::DistanceBased)
+	{
+		return;
+	}
+
+	// Get center and radius from bounds
+	FVector Center = EditBounds.GetCenter();
+	float Radius = EditBounds.GetExtent().GetMax();
+
+	ActivateChunksForEdit(Center, Radius);
+}
+
+void UFluidChunkManager::ActivateChunksForEdit(const FVector& EditLocation, float Radius)
+{
+	// Use configured edit activation radius or the provided radius, whichever is larger
+	float ActivationRadius = FMath::Max(Radius, StreamingConfig.EditActivationRadius);
+	
+	// Find all chunks that could be affected by this edit
+	TArray<FFluidChunkCoord> AffectedChunks = GetChunksInBounds(
+		FBox(EditLocation - FVector(ActivationRadius), EditLocation + FVector(ActivationRadius))
+	);
+
+	float CurrentTime = FPlatformTime::Seconds();
+
+	UE_LOG(LogTemp, Log, TEXT("Voxel edit at %s, activating %d chunks in radius %.0f"), 
+		*EditLocation.ToString(), AffectedChunks.Num(), ActivationRadius);
+
+	for (const FFluidChunkCoord& ChunkCoord : AffectedChunks)
+	{
+		// Get or create the chunk
+		UFluidChunk* Chunk = GetOrCreateChunk(ChunkCoord);
+		if (!Chunk)
+			continue;
+
+		// Load chunk if not loaded
+		if (Chunk->State == EChunkState::Unloaded)
+		{
+			Chunk->LoadChunk();
+			
+			// Try to restore from cache
+			if (StreamingConfig.bEnablePersistence)
+			{
+				FChunkPersistentData PersistentData;
+				if (LoadChunkData(ChunkCoord, PersistentData))
+				{
+					Chunk->DeserializeChunkData(PersistentData);
+				}
+			}
+		}
+
+		// Activate the chunk if not already active
+		if (Chunk->State != EChunkState::Active)
+		{
+			ActivateChunk(Chunk);
+			
+			// Mark as edit-activated
+			EditActivatedChunks.Add(ChunkCoord, CurrentTime);
+			ChunkSettledTimes.Remove(ChunkCoord); // Clear any settled time
+			
+			UE_LOG(LogTemp, Verbose, TEXT("Edit-activated chunk [%d,%d,%d]"), 
+				ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
+		}
+		else
+		{
+			// Refresh the activation time if already active
+			if (EditActivatedChunks.Contains(ChunkCoord))
+			{
+				EditActivatedChunks[ChunkCoord] = CurrentTime;
+				ChunkSettledTimes.Remove(ChunkCoord);
+			}
+		}
+	}
+}
+
+void UFluidChunkManager::CheckForSettledChunks()
+{
+	// Only check if we're using edit-triggered activation
+	if (StreamingConfig.ActivationMode == EChunkActivationMode::DistanceBased)
+	{
+		return;
+	}
+
+	float CurrentTime = FPlatformTime::Seconds();
+	TArray<FFluidChunkCoord> ChunksToDeactivate;
+
+	// Check all edit-activated chunks
+	for (const auto& Pair : EditActivatedChunks)
+	{
+		const FFluidChunkCoord& ChunkCoord = Pair.Key;
+		float ActivationTime = Pair.Value;
+
+		UFluidChunk* Chunk = GetChunk(ChunkCoord);
+		if (!Chunk || Chunk->State != EChunkState::Active)
+			continue;
+
+		// Check if chunk has settled
+		bool bIsSettled = (Chunk->TotalFluidActivity < StreamingConfig.MinActivityForDeactivation) &&
+						  (Chunk->bFullySettled || Chunk->GetTotalFluidVolume() < 0.1f);
+
+		if (bIsSettled)
+		{
+			// Track when chunk became settled
+			if (!ChunkSettledTimes.Contains(ChunkCoord))
+			{
+				ChunkSettledTimes.Add(ChunkCoord, CurrentTime);
+				UE_LOG(LogTemp, Verbose, TEXT("Chunk [%d,%d,%d] became settled"), 
+					ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
+			}
+			else
+			{
+				// Check if it's been settled long enough
+				float SettledTime = ChunkSettledTimes[ChunkCoord];
+				if (CurrentTime - SettledTime >= StreamingConfig.SettledDeactivationDelay)
+				{
+					ChunksToDeactivate.Add(ChunkCoord);
+				}
+			}
+		}
+		else
+		{
+			// Chunk is active again, remove from settled tracking
+			ChunkSettledTimes.Remove(ChunkCoord);
+		}
+	}
+
+	// Deactivate settled chunks
+	for (const FFluidChunkCoord& ChunkCoord : ChunksToDeactivate)
+	{
+		UFluidChunk* Chunk = GetChunk(ChunkCoord);
+		if (Chunk)
+		{
+			UE_LOG(LogTemp, Log, TEXT("Deactivating settled chunk [%d,%d,%d]"), 
+				ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
+			
+			DeactivateChunk(Chunk);
+			EditActivatedChunks.Remove(ChunkCoord);
+			ChunkSettledTimes.Remove(ChunkCoord);
+		}
+	}
+}
+
+bool UFluidChunkManager::IsChunkEditActivated(const FFluidChunkCoord& Coord) const
+{
+	return EditActivatedChunks.Contains(Coord);
 }
 

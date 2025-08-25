@@ -347,6 +347,29 @@ TArray<FIntVector> UStaticWaterRenderer::GetActiveRenderChunkCoords() const
 	return ActiveRenderChunkCoords.Array();
 }
 
+void UStaticWaterRenderer::GetLODStatistics(int32& OutLOD0Count, int32& OutLOD1Count, int32& OutLOD2Count) const
+{
+	FScopeLock Lock(&RenderChunkMutex);
+	
+	OutLOD0Count = 0;
+	OutLOD1Count = 0;
+	OutLOD2Count = 0;
+	
+	for (const auto& Pair : LoadedRenderChunks)
+	{
+		const FStaticWaterRenderChunk& Chunk = Pair.Value;
+		if (Chunk.MeshComponent && Chunk.MeshComponent->IsValidLowLevel() && Chunk.MeshComponent->IsVisible())
+		{
+			switch (Chunk.LODLevel)
+			{
+				case 0: OutLOD0Count++; break;
+				case 1: OutLOD1Count++; break;
+				default: OutLOD2Count++; break;
+			}
+		}
+	}
+}
+
 void UStaticWaterRenderer::UpdateRenderChunks(float DeltaTime)
 {
 	RenderUpdateTimer += DeltaTime;
@@ -635,15 +658,27 @@ void UStaticWaterRenderer::BuildChunkMesh(FStaticWaterRenderChunk& Chunk)
 	if (!WaterGenerator || !Chunk.MeshComponent || !Chunk.MeshComponent->IsValidLowLevel())
 		return;
 	
-	// Check if there's active fluid simulation in this area
-	// If so, don't render static water (let the fluid simulation render instead)
+	// Don't automatically hide static water - let it render alongside dynamic water
+	// This prevents visual pops when transitioning between systems
+	/* DISABLED - Static and dynamic water can coexist
 	if (AActor* Owner = GetOwner())
 	{
 		if (AVoxelFluidActor* FluidActor = Cast<AVoxelFluidActor>(Owner))
 		{
-			// Check if this region has active simulation
+			// Check if this region has active simulation - use a smaller radius for smoother transition
 			const FVector ChunkCenter = Chunk.WorldBounds.GetCenter();
-			if (FluidActor->IsRegionActiveForSimulation(ChunkCenter))
+			const float ActiveSimRadius = RenderSettings.MinRenderDistance * 0.9f; // Slightly smaller than min render distance
+			
+			// Get player position for distance check
+			FVector PlayerPos = FVector::ZeroVector;
+			if (ViewerPositions.Num() > 0)
+			{
+				PlayerPos = ViewerPositions[0];
+			}
+			
+			// Hide static water only if very close to player where simulation is active
+			float DistToPlayer = FVector::Dist(ChunkCenter, PlayerPos);
+			if (DistToPlayer < ActiveSimRadius)
 			{
 				// Active simulation in this area, hide static water
 				Chunk.MeshComponent->ClearAllMeshSections();
@@ -658,6 +693,7 @@ void UStaticWaterRenderer::BuildChunkMesh(FStaticWaterRenderChunk& Chunk)
 			}
 		}
 	}
+	*/
 		
 	const double StartTime = FPlatformTime::Seconds();
 	

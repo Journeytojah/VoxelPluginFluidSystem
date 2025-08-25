@@ -805,6 +805,14 @@ void UFluidVisualizationComponent::GenerateMarchingCubesVisualization()
 		Triangles.Add(MarchingTriangle.VertexIndices[0]);
 		Triangles.Add(MarchingTriangle.VertexIndices[1]);
 		Triangles.Add(MarchingTriangle.VertexIndices[2]);
+		
+		// Add reverse-winding triangles if double-sided geometry is enabled
+		if (bGenerateDoubleSidedGeometry)
+		{
+			Triangles.Add(MarchingTriangle.VertexIndices[2]);
+			Triangles.Add(MarchingTriangle.VertexIndices[1]);
+			Triangles.Add(MarchingTriangle.VertexIndices[0]);
+		}
 	}
 	
 	// Update procedural mesh
@@ -1020,6 +1028,14 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 						Triangles.Add(MarchingTriangle.VertexIndices[0]);
 						Triangles.Add(MarchingTriangle.VertexIndices[1]);
 						Triangles.Add(MarchingTriangle.VertexIndices[2]);
+						
+						// Add reverse-winding triangles if double-sided geometry is enabled
+						if (bGenerateDoubleSidedGeometry)
+						{
+							Triangles.Add(MarchingTriangle.VertexIndices[2]);
+							Triangles.Add(MarchingTriangle.VertexIndices[1]);
+							Triangles.Add(MarchingTriangle.VertexIndices[0]);
+						}
 					}
 					
 					// Store the generated mesh data for persistence

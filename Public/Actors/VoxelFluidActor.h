@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "CellularAutomata/FluidChunkManager.h"
 #include "VoxelFluidActor.generated.h"
 
 class UCAFluidGrid;
@@ -146,6 +147,19 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
 	float LOD2Distance = 4000.0f;
+
+	// Chunk Activation Mode Settings
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Activation")
+	EChunkActivationMode ChunkActivationMode = EChunkActivationMode::EditTriggered;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Activation", meta = (EditCondition = "ChunkActivationMode == EChunkActivationMode::EditTriggered || ChunkActivationMode == EChunkActivationMode::Hybrid"))
+	float EditActivationRadius = 3000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Activation", meta = (EditCondition = "ChunkActivationMode == EChunkActivationMode::EditTriggered || ChunkActivationMode == EChunkActivationMode::Hybrid"))
+	float SettledDeactivationDelay = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Activation", meta = (EditCondition = "ChunkActivationMode == EChunkActivationMode::EditTriggered || ChunkActivationMode == EChunkActivationMode::Hybrid"))
+	float MinActivityForDeactivation = 0.001f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation Bounds", meta = (CallInEditor = "true"))
 	FVector SimulationBoundsExtent = FVector(25600.0f, 25600.0f, 3200.0f); // Much larger for more chunks
@@ -325,6 +339,10 @@ public:
 	
 	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
 	void SpawnSimulationWaterAroundPlayer();
+	
+	// Debug function to test edit-triggered activation
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid Debug", meta = (CallInEditor = "true"))
+	void TestEditTriggeredActivation(const FVector& TestPosition, float TestRadius = 500.0f);
 
 private:
 	void ManageSimulationWaterAroundPlayer(const FVector& PlayerPos);

@@ -180,6 +180,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Static Water Rendering")
 	TArray<FIntVector> GetActiveRenderChunkCoords() const;
+	
+	// LOD statistics
+	UFUNCTION(BlueprintCallable, Category = "Static Water Rendering")
+	void GetLODStatistics(int32& OutLOD0Count, int32& OutLOD1Count, int32& OutLOD2Count) const;
 
 	// Settings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Render Settings")

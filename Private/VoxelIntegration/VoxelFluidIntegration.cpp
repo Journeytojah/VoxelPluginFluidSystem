@@ -601,6 +601,12 @@ void UVoxelFluidIntegration::OnVoxelTerrainModified(const FBox& ModifiedBounds)
 	if (!bUse3DVoxelTerrain)
 		return;
 	
+	// Notify chunk manager about voxel edit for edit-triggered activation
+	if (bUseChunkedSystem && ChunkManager)
+	{
+		ChunkManager->OnVoxelEditOccurredInBounds(ModifiedBounds);
+	}
+	
 	// Add this region to pending updates
 	{
 		FScopeLock Lock(&TerrainUpdateMutex);
@@ -768,6 +774,11 @@ void UVoxelFluidIntegration::RefreshTerrainInRadius(const FVector& Center, float
 	if (!bUse3DVoxelTerrain)
 		return;
 	
+	// Notify chunk manager about voxel edit for edit-triggered activation
+	if (bUseChunkedSystem && ChunkManager)
+	{
+		ChunkManager->OnVoxelEditOccurred(Center, Radius);
+	}
 	
 	if (bUseChunkedSystem && ChunkManager)
 	{

@@ -8,10 +8,30 @@
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnChunkLoaded, const FFluidChunkCoord&);
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnChunkUnloaded, const FFluidChunkCoord&);
 
+UENUM(BlueprintType)
+enum class EChunkActivationMode : uint8
+{
+	DistanceBased UMETA(DisplayName = "Distance Based"),
+	EditTriggered UMETA(DisplayName = "Edit Triggered"),
+	Hybrid UMETA(DisplayName = "Hybrid (Distance + Edit)")
+};
+
 USTRUCT(BlueprintType)
 struct VOXELFLUIDSYSTEM_API FChunkStreamingConfig
 {
 	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Activation")
+	EChunkActivationMode ActivationMode = EChunkActivationMode::EditTriggered;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Activation", meta = (EditCondition = "ActivationMode == EChunkActivationMode::EditTriggered || ActivationMode == EChunkActivationMode::Hybrid"))
+	float EditActivationRadius = 3000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Activation", meta = (EditCondition = "ActivationMode == EChunkActivationMode::EditTriggered || ActivationMode == EChunkActivationMode::Hybrid"))
+	float SettledDeactivationDelay = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Activation", meta = (EditCondition = "ActivationMode == EChunkActivationMode::EditTriggered || ActivationMode == EChunkActivationMode::Hybrid"))
+	float MinActivityForDeactivation = 0.001f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Streaming")
 	float ActiveDistance = 8000.0f;
@@ -172,6 +192,13 @@ public:
 	// Check if chunk operations are in progress
 	bool IsProcessingChunkOperations() const { return bFreezeFluidForChunkOps; }
 
+	// Edit-triggered activation methods
+	void OnVoxelEditOccurred(const FVector& EditLocation, float EditRadius);
+	void OnVoxelEditOccurredInBounds(const FBox& EditBounds);
+	void ActivateChunksForEdit(const FVector& EditLocation, float Radius);
+	void CheckForSettledChunks();
+	bool IsChunkEditActivated(const FFluidChunkCoord& Coord) const;
+
 public:
 	FOnChunkLoaded OnChunkLoadedDelegate;
 	FOnChunkUnloaded OnChunkUnloadedDelegate;
@@ -298,4 +325,10 @@ protected:
 	FCriticalSection ChunkMapMutex;
 	
 	bool bIsInitialized = false;
+
+	// Edit-triggered activation tracking
+	TMap<FFluidChunkCoord, float> EditActivatedChunks; // Coord -> Time when activated
+	TMap<FFluidChunkCoord, float> ChunkSettledTimes; // Coord -> Time when chunk became settled
+	float SettledChunkCheckTimer = 0.0f;
+	const float SettledChunkCheckInterval = 0.5f; // Check every 500ms
 };

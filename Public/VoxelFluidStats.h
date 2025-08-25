@@ -160,3 +160,35 @@ DECLARE_DWORD_COUNTER_STAT(TEXT("Octree Depth"), STAT_VoxelFluid_OctreeDepth, ST
 // Performance Timing Savings
 DECLARE_FLOAT_COUNTER_STAT(TEXT("Time Saved MS"), STAT_VoxelFluid_TimeSavedMS, STATGROUP_VoxelFluid);
 DECLARE_FLOAT_COUNTER_STAT(TEXT("Optimization %"), STAT_VoxelFluid_OptimizationPercent, STATGROUP_VoxelFluid);
+
+// =====================================================
+//  HYBRID WATER SYSTEM METRICS - NEW!
+// =====================================================
+
+// Static Water Rendering
+DECLARE_CYCLE_STAT(TEXT("[STATIC] Render Update"), STAT_VoxelFluid_StaticRenderUpdate, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[STATIC] Mesh Generation"), STAT_VoxelFluid_StaticMeshGen, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[STATIC] Render Chunks"), STAT_VoxelFluid_StaticRenderChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[STATIC] LOD0 Chunks"), STAT_VoxelFluid_StaticLOD0Chunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[STATIC] LOD1+ Chunks"), STAT_VoxelFluid_StaticLOD1PlusChunks, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[STATIC] Ring Inner Radius"), STAT_VoxelFluid_StaticRingInnerRadius, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[STATIC] Ring Outer Radius"), STAT_VoxelFluid_StaticRingOuterRadius, STATGROUP_VoxelFluid);
+
+// Simulation vs Static Distribution
+DECLARE_DWORD_COUNTER_STAT(TEXT("[HYBRID] Sim Chunks"), STAT_VoxelFluid_SimulationChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[HYBRID] Static Chunks"), STAT_VoxelFluid_HybridStaticChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[HYBRID] Transition Chunks"), STAT_VoxelFluid_TransitionChunks, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[HYBRID] Sim/Static Ratio"), STAT_VoxelFluid_SimStaticRatio, STATGROUP_VoxelFluid);
+
+// Water Activation System
+DECLARE_CYCLE_STAT(TEXT("[ACTIVATE] Region Check"), STAT_VoxelFluid_ActivationCheck, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[ACTIVATE] Water Spawn"), STAT_VoxelFluid_WaterSpawn, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[ACTIVATE] Active Regions"), STAT_VoxelFluid_ActiveRegions, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[ACTIVATE] Pending Activations"), STAT_VoxelFluid_PendingActivations, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[ACTIVATE] Spawn Rate/s"), STAT_VoxelFluid_WaterSpawnRate, STATGROUP_VoxelFluid);
+
+// Performance Comparison
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[PERF] Sim MS/Chunk"), STAT_VoxelFluid_SimMSPerChunk, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[PERF] Static MS/Chunk"), STAT_VoxelFluid_StaticMSPerChunk, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[PERF] Total Frame MS"), STAT_VoxelFluid_TotalFrameMS, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[PERF] FPS Impact"), STAT_VoxelFluid_FPSImpact, STATGROUP_VoxelFluid);

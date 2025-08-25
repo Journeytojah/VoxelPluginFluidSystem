@@ -169,8 +169,8 @@ void AVoxelFluidActor::BeginPlay()
 			// Setup the test water system first (enables debug vis and logging)
 			SetupTestWaterSystem();
 			
-			// Force load chunks around the player first
-			if (ChunkManager)
+			// Only force load chunks in distance-based mode
+			if (ChunkManager && ChunkActivationMode == EChunkActivationMode::DistanceBased)
 			{
 				TArray<FVector> ViewerPositions = GetViewerPositions();
 				
@@ -204,8 +204,11 @@ void AVoxelFluidActor::BeginPlay()
 						StaticWaterRenderer->RenderSettings.MinRenderDistance);
 				}
 				
-				// Spawn initial simulation water in the center area where static water doesn't render
-				SpawnSimulationWaterAroundPlayer();
+				// Only spawn initial water in distance-based mode
+				if (ChunkActivationMode == EChunkActivationMode::DistanceBased)
+				{
+					SpawnSimulationWaterAroundPlayer();
+				}
 			}, 1.0f, false);
 			
 		}, 1.0f, false); // Wait 1 second for terrain to be ready
@@ -261,6 +264,45 @@ void AVoxelFluidActor::Tick(float DeltaTime)
 					{
 						ManageSimulationWaterAroundPlayer(PlayerPos);
 					}
+					
+					// Update hybrid system stats
+					if (StaticWaterRenderer)
+					{
+						// Static water rendering stats
+						SET_DWORD_STAT(STAT_VoxelFluid_StaticRenderChunks, StaticWaterRenderer->GetActiveRenderChunkCount());
+						
+						// Get LOD distribution
+						int32 LOD0Count, LOD1Count, LOD2Count;
+						StaticWaterRenderer->GetLODStatistics(LOD0Count, LOD1Count, LOD2Count);
+						SET_DWORD_STAT(STAT_VoxelFluid_StaticLOD0Chunks, LOD0Count);
+						SET_DWORD_STAT(STAT_VoxelFluid_StaticLOD1PlusChunks, LOD1Count + LOD2Count);
+						
+						// Ring rendering stats  
+						SET_FLOAT_STAT(STAT_VoxelFluid_StaticRingInnerRadius, StaticWaterRenderer->RenderSettings.MinRenderDistance);
+						SET_FLOAT_STAT(STAT_VoxelFluid_StaticRingOuterRadius, StaticWaterRenderer->RenderSettings.MaxRenderDistance);
+					}
+					
+					// Hybrid system distribution stats
+					if (ChunkManager && StaticWaterRenderer)
+					{
+						int32 SimChunks = ChunkManager->GetActiveChunkCount();
+						int32 StaticChunks = StaticWaterRenderer->GetActiveRenderChunkCount();
+						
+						SET_DWORD_STAT(STAT_VoxelFluid_SimulationChunks, SimChunks);
+						SET_DWORD_STAT(STAT_VoxelFluid_HybridStaticChunks, StaticChunks);
+						SET_DWORD_STAT(STAT_VoxelFluid_TransitionChunks, 0); // Would need to track transition chunks
+						
+						// Calculate coverage ratio
+						float SimToStaticRatio = StaticChunks > 0 ? (float)SimChunks / (float)StaticChunks : 0.0f;
+						SET_FLOAT_STAT(STAT_VoxelFluid_SimStaticRatio, SimToStaticRatio);
+					}
+					
+					// Water activation stats
+					if (WaterActivationManager)
+					{
+						SET_DWORD_STAT(STAT_VoxelFluid_ActiveRegions, WaterActivationManager->GetActiveRegionCount());
+						// SET_FLOAT_STAT(STAT_VoxelFluid_WaterSpawnRate, WaterActivationManager->GetSpawnRate());
+					}
 				}
 			}
 		}
@@ -298,6 +340,38 @@ void AVoxelFluidActor::Tick(float DeltaTime)
 		}
 
 		LastFrameSimulationTime = (FPlatformTime::Seconds() - StartTime) * 1000.0f; // Convert to ms
+		
+		// Update performance comparison stats
+		if (ChunkManager)
+		{
+			int32 ActiveChunks = ChunkManager->GetActiveChunkCount();
+			if (ActiveChunks > 0)
+			{
+				float MSPerChunk = LastFrameSimulationTime / ActiveChunks;
+				SET_FLOAT_STAT(STAT_VoxelFluid_SimMSPerChunk, MSPerChunk);
+			}
+		}
+	}
+
+	// Update static water rendering performance stats
+	if (StaticWaterRenderer)
+	{
+		// Static water rendering is much cheaper - estimate based on chunk count
+		int32 StaticChunks = StaticWaterRenderer->GetActiveRenderChunkCount();
+		if (StaticChunks > 0)
+		{
+			// Static water typically takes ~0.01-0.05ms per chunk for simple mesh rendering
+			float EstimatedStaticMS = StaticChunks * 0.02f; // 0.02ms per chunk estimate
+			SET_FLOAT_STAT(STAT_VoxelFluid_StaticMSPerChunk, 0.02f);
+			
+			// Total frame MS
+			float TotalFrameMS = LastFrameSimulationTime + EstimatedStaticMS;
+			SET_FLOAT_STAT(STAT_VoxelFluid_TotalFrameMS, TotalFrameMS);
+			
+			// FPS impact
+			float FPSImpact = TotalFrameMS > 0 ? 1000.0f / TotalFrameMS : 0.0f;
+			SET_FLOAT_STAT(STAT_VoxelFluid_FPSImpact, FPSImpact);
+		}
 	}
 
 	if (bShowFlowVectors || bShowChunkBorders || bShowChunkStates)
@@ -727,11 +801,71 @@ void AVoxelFluidActor::UpdateSimulationBounds()
 
 FString AVoxelFluidActor::GetPerformanceStats() const
 {
+	FString Stats;
+	
+	// Hybrid System Overview
+	Stats += TEXT("=== HYBRID WATER SYSTEM ===\n");
+	
+	// Simulation Stats
 	if (ChunkManager)
 	{
-		return GetChunkSystemStats();
+		int32 SimChunks = ChunkManager->GetActiveChunkCount();
+		int32 LoadedChunks = ChunkManager->GetLoadedChunkCount();
+		Stats += FString::Printf(TEXT("Simulation: %d active / %d loaded chunks\n"), SimChunks, LoadedChunks);
+		Stats += FString::Printf(TEXT("Sim Time: %.2f ms\n"), LastFrameSimulationTime);
 	}
-	return TEXT("Chunk system not initialized");
+	
+	// Static Water Stats
+	if (StaticWaterRenderer)
+	{
+		int32 StaticChunks = StaticWaterRenderer->GetActiveRenderChunkCount();
+		int32 VisibleChunks = StaticWaterRenderer->GetVisibleRenderChunkCount();
+		
+		int32 LOD0, LOD1, LOD2;
+		StaticWaterRenderer->GetLODStatistics(LOD0, LOD1, LOD2);
+		
+		Stats += FString::Printf(TEXT("Static Water: %d active / %d visible chunks\n"), StaticChunks, VisibleChunks);
+		Stats += FString::Printf(TEXT("LODs: %d (High) / %d (Med) / %d (Low)\n"), LOD0, LOD1, LOD2);
+		Stats += FString::Printf(TEXT("Ring: %.1fm - %.1fm\n"), 
+			StaticWaterRenderer->RenderSettings.MinRenderDistance / 100.0f,
+			StaticWaterRenderer->RenderSettings.MaxRenderDistance / 100.0f);
+	}
+	
+	// Water Activation Stats
+	if (WaterActivationManager)
+	{
+		int32 ActiveRegions = WaterActivationManager->GetActiveRegionCount();
+		Stats += FString::Printf(TEXT("Active Water Regions: %d\n"), ActiveRegions);
+	}
+	
+	// Performance Comparison
+	if (ChunkManager && StaticWaterRenderer)
+	{
+		int32 SimChunks = ChunkManager->GetActiveChunkCount();
+		int32 StaticChunks = StaticWaterRenderer->GetActiveRenderChunkCount();
+		float Ratio = StaticChunks > 0 ? (float)SimChunks / (float)StaticChunks : 0.0f;
+		
+		Stats += TEXT("\n=== PERFORMANCE ===\n");
+		Stats += FString::Printf(TEXT("Sim/Static Ratio: %.2f\n"), Ratio);
+		
+		if (SimChunks > 0)
+		{
+			float MSPerSimChunk = LastFrameSimulationTime / SimChunks;
+			Stats += FString::Printf(TEXT("MS per Sim Chunk: %.3f\n"), MSPerSimChunk);
+		}
+		
+		// Static water is much cheaper
+		Stats += FString::Printf(TEXT("MS per Static Chunk: ~0.02 (estimated)\n"));
+	}
+	
+	// Add original chunk system stats if available
+	if (ChunkManager)
+	{
+		Stats += TEXT("\n");
+		Stats += GetChunkSystemStats();
+	}
+	
+	return Stats;
 }
 
 void AVoxelFluidActor::EnableProfiling(bool bEnable)
@@ -782,6 +916,10 @@ void AVoxelFluidActor::InitializeChunkSystem()
 	ChunkManager->Initialize(ChunkSize, CellSize, SimulationOrigin, WorldSize);
 
 	FChunkStreamingConfig Config;
+	Config.ActivationMode = ChunkActivationMode;
+	Config.EditActivationRadius = EditActivationRadius;
+	Config.SettledDeactivationDelay = SettledDeactivationDelay;
+	Config.MinActivityForDeactivation = MinActivityForDeactivation;
 	Config.ActiveDistance = ChunkActiveDistance;
 	Config.LoadDistance = ChunkLoadDistance;
 	Config.MaxActiveChunks = MaxActiveChunks;
@@ -1561,14 +1699,19 @@ void AVoxelFluidActor::RemoveStaticWaterRegion(const FVector& Center, float Radi
 
 void AVoxelFluidActor::OnTerrainEdited(const FVector& EditPosition, float EditRadius, float HeightChange)
 {
-	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: OnTerrainEdited called at %s (radius: %.1f, height change: %.1f)"), 
-		*EditPosition.ToString(), EditRadius, HeightChange);
-
+	// CRITICAL: In edit-triggered mode, activate chunks FIRST before any other operations
+	if (ChunkManager && ChunkActivationMode != EChunkActivationMode::DistanceBased)
+	{
+		// Activate chunks in the edit area - this ensures chunks exist before we try to add water
+		ChunkManager->OnVoxelEditOccurred(EditPosition, EditRadius);
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Activated chunks for terrain edit at %s"), 
+			*EditPosition.ToString());
+	}
+	
 	// First, refresh the terrain data in the affected area
 	if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
 	{
 		VoxelIntegration->RefreshTerrainInRadius(EditPosition, EditRadius);
-		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Refreshed terrain data"));
 	}
 
 	// Check if there's static water at this location
@@ -1580,7 +1723,6 @@ void AVoxelFluidActor::OnTerrainEdited(const FVector& EditPosition, float EditRa
 		if (bHasWater)
 		{
 			WaterLevel = StaticWaterGenerator->GetWaterLevelAtLocation(EditPosition);
-			UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Found static water at level %.1f"), WaterLevel);
 		}
 		
 		// Notify static water generator about terrain changes
@@ -1588,53 +1730,63 @@ void AVoxelFluidActor::OnTerrainEdited(const FVector& EditPosition, float EditRa
 		StaticWaterGenerator->OnTerrainChanged(ChangedBounds);
 	}
 
-	// If there's water, spawn actual fluid simulation
+	// If there's water, spawn MINIMAL fluid simulation only where edited
 	if (bHasWater && ChunkManager)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Spawning fluid simulation for water flow"));
-		
 		// Make sure simulation is running
 		if (!bIsSimulating)
 		{
 			StartSimulation();
-			UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Started simulation for water flow"));
 		}
 		
-		// Create a grid of fluid spawn points above the edited area
-		const float SpawnSpacing = CellSize; // Use cell size for spacing
-		const int32 SpawnGridSize = FMath::CeilToInt(EditRadius * 2.0f / SpawnSpacing);
-		const float SpawnHeight = WaterLevel; // Spawn at water level
+		// Only spawn water in a small radius around the edit point
+		// This creates a localized dynamic water effect instead of converting entire chunks
+		const float LocalizedSpawnRadius = FMath::Min(EditRadius * 1.5f, CellSize * 4.0f); // Max 4 cells radius
+		const float SpawnSpacing = CellSize;
+		const int32 SpawnGridSize = FMath::CeilToInt(LocalizedSpawnRadius / SpawnSpacing);
 		
 		int32 SpawnedCount = 0;
-		for (int32 X = -SpawnGridSize/2; X <= SpawnGridSize/2; ++X)
+		for (int32 X = -SpawnGridSize; X <= SpawnGridSize; ++X)
 		{
-			for (int32 Y = -SpawnGridSize/2; Y <= SpawnGridSize/2; ++Y)
+			for (int32 Y = -SpawnGridSize; Y <= SpawnGridSize; ++Y)
 			{
 				const FVector SpawnPos = EditPosition + FVector(X * SpawnSpacing, Y * SpawnSpacing, 0);
-				
-				// Check distance from center
 				const float DistFromCenter = FVector::Dist2D(SpawnPos, EditPosition);
-				if (DistFromCenter <= EditRadius)
+				
+				if (DistFromCenter <= LocalizedSpawnRadius)
 				{
-					// Always spawn water above the edited area to ensure it flows down
-					// Spawn multiple layers to ensure good flow
-					for (int32 Z = 0; Z <= 5; ++Z)
+					// Sample terrain at this specific location
+					float TerrainHeight = EditPosition.Z - HeightChange;
+					if (VoxelIntegration)
 					{
-						FVector FluidSpawnPos = FVector(SpawnPos.X, SpawnPos.Y, WaterLevel + Z * CellSize);
+						TerrainHeight = VoxelIntegration->SampleVoxelHeight(SpawnPos.X, SpawnPos.Y);
+					}
+					
+					// Only spawn water if it's above terrain and below water level
+					if (TerrainHeight < WaterLevel)
+					{
+						// Spawn a thin layer of water just above terrain
+						float SpawnHeight = FMath::Max(TerrainHeight + CellSize * 0.5f, EditPosition.Z);
+						FVector FluidSpawnPos = FVector(SpawnPos.X, SpawnPos.Y, SpawnHeight);
 						
-						// Add full cells of fluid
-						const float FluidAmount = 1.0f;
+						// Add less fluid for smoother transition
+						const float FluidAmount = 0.5f; // Half-filled cells for gentler flow
 						AddFluidAtLocation(FluidSpawnPos, FluidAmount);
 						SpawnedCount++;
+						
+						// Add one extra layer if it's a deep cut
+						if (HeightChange > CellSize * 2.0f)
+						{
+							FluidSpawnPos.Z += CellSize;
+							AddFluidAtLocation(FluidSpawnPos, FluidAmount);
+							SpawnedCount++;
+						}
 					}
 				}
 			}
 		}
 		
-		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Spawned %d fluid cells for water flow"), SpawnedCount);
-		
-		// Also use the refill system for additional water if needed
-		RefillStaticWaterInRadius(EditPosition, EditRadius * 1.5f);
+		UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Spawned %d localized fluid cells"), SpawnedCount);
 	}
 
 	// Trigger water activation manager if needed (for region tracking)
@@ -1654,6 +1806,16 @@ void AVoxelFluidActor::OnVoxelTerrainModified(const FVector& ModifiedPosition, f
 {
 	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: OnVoxelTerrainModified called at %s (radius: %.1f)"), 
 		*ModifiedPosition.ToString(), ModifiedRadius);
+	
+	// CRITICAL: In edit-triggered mode, explicitly activate chunks where edits occur
+	if (ChunkManager && ChunkActivationMode != EChunkActivationMode::DistanceBased)
+	{
+		// Notify chunk manager about the edit to activate affected chunks
+		ChunkManager->OnVoxelEditOccurred(ModifiedPosition, ModifiedRadius);
+		
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Activated chunks for edit at %s"), 
+			*ModifiedPosition.ToString());
+	}
 	
 	// Call OnTerrainEdited with a default height change value
 	// In practice, you might want to calculate the actual height change
@@ -1721,18 +1883,18 @@ void AVoxelFluidActor::SetupTestWaterSystem()
 
 	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Setting up test water system..."));
 
-	// Enable debug visualization
-	StaticWaterGenerator->bShowTileBounds = true;
-	StaticWaterGenerator->bShowWaterRegions = true;
-	StaticWaterRenderer->bShowRenderChunkBounds = true;
+	// Disable debug visualization by default (user can enable if needed)
+	StaticWaterGenerator->bShowTileBounds = false;
+	StaticWaterGenerator->bShowWaterRegions = false;
+	StaticWaterRenderer->bShowRenderChunkBounds = false;
 	
-	// Enable logging for debugging
-	StaticWaterGenerator->bEnableLogging = true;
-	StaticWaterRenderer->bEnableLogging = true;
+	// Disable verbose logging by default
+	StaticWaterGenerator->bEnableLogging = false;
+	StaticWaterRenderer->bEnableLogging = false;
 	if (WaterActivationManager)
 	{
-		WaterActivationManager->bEnableLogging = true;
-		WaterActivationManager->bShowActiveRegions = true;
+		WaterActivationManager->bEnableLogging = false;
+		WaterActivationManager->bShowActiveRegions = false;
 	}
 
 	// Force connection between generator and renderer
@@ -1832,6 +1994,11 @@ void AVoxelFluidActor::RecenterOceanOnPlayer()
 
 void AVoxelFluidActor::ManageSimulationWaterAroundPlayer(const FVector& PlayerPos)
 {
+	// Disabled automatic water spawning - only spawn water when terrain is edited
+	// This prevents the jarring visual disconnect between static and dynamic water
+	return;
+	
+	/* DISABLED - Keeping code for reference
 	if (!ChunkManager || !StaticWaterGenerator)
 		return;
 	
@@ -1840,48 +2007,68 @@ void AVoxelFluidActor::ManageSimulationWaterAroundPlayer(const FVector& PlayerPo
 	if (!StaticWaterGenerator->HasStaticWaterAtLocation(PlayerPos))
 		return; // No water in this area
 	
-	// Define the radius where we want simulation water (inside the static water ring)
+	// Match the simulation radius to where static water stops rendering
 	const float SimulationRadius = StaticWaterRenderer ? 
-		StaticWaterRenderer->RenderSettings.MinRenderDistance * 0.8f : 2000.0f;
+		StaticWaterRenderer->RenderSettings.MinRenderDistance : 1500.0f;
 	
-	// Find all chunks within simulation radius
+	// Only manage water in the immediate vicinity - let static water handle the rest
 	FBox SimulationBounds = FBox::BuildAABB(PlayerPos, FVector(SimulationRadius));
 	TArray<FFluidChunkCoord> NearbyChunks = ChunkManager->GetChunksInBounds(SimulationBounds);
 	
+	// Keep track of chunks to avoid excessive spawning
+	static TSet<FFluidChunkCoord> ProcessedChunks;
+	static float LastPlayerZ = PlayerPos.Z;
+	
+	// Clear processed chunks if player moved significantly vertically (e.g., teleported)
+	if (FMath::Abs(PlayerPos.Z - LastPlayerZ) > 1000.0f)
+	{
+		ProcessedChunks.Empty();
+	}
+	LastPlayerZ = PlayerPos.Z;
+	
 	for (const FFluidChunkCoord& ChunkCoord : NearbyChunks)
 	{
+		// Skip if we already processed this chunk recently
+		if (ProcessedChunks.Contains(ChunkCoord))
+			continue;
+			
 		UFluidChunk* Chunk = ChunkManager->GetChunk(ChunkCoord);
 		if (!Chunk)
 			continue;
 		
-		// Check if this chunk already has water
-		bool bHasWater = false;
-		for (const FCAFluidCell& Cell : Chunk->Cells)
-		{
-			if (Cell.FluidLevel > 0.1f)
-			{
-				bHasWater = true;
-				break;
-			}
-		}
+		FBox ChunkBounds = Chunk->GetWorldBounds();
+		FVector ChunkCenter = ChunkBounds.GetCenter();
+		float DistFromPlayer = FVector::Dist(ChunkCenter, PlayerPos);
 		
-		// If chunk doesn't have water but should, spawn it
-		if (!bHasWater)
+		// Only spawn in chunks that are within the inner simulation zone (where static water doesn't render)
+		if (DistFromPlayer <= SimulationRadius * 0.8f)
 		{
-			FBox ChunkBounds = Chunk->GetWorldBounds();
-			FVector ChunkCenter = ChunkBounds.GetCenter();
-			
-			// Only spawn if within simulation radius
-			float DistFromPlayer = FVector::Dist(ChunkCenter, PlayerPos);
-			if (DistFromPlayer <= SimulationRadius)
+			// Check if this chunk already has water
+			bool bHasWater = false;
+			for (const FCAFluidCell& Cell : Chunk->Cells)
 			{
-				// Spawn water in this chunk
+				if (Cell.FluidLevel > 0.1f)
+				{
+					bHasWater = true;
+					break;
+				}
+			}
+			
+			// If chunk doesn't have water but should, spawn minimal amount
+			if (!bHasWater)
+			{
+				// Fill water more densely for proper surface continuity
 				const int32 CellsPerAxis = ChunkSize;
 				const float SpawnSpacing = CellSize;
+				int32 SpawnedCells = 0;
+				const int32 MaxCellsPerChunk = 100; // Allow more cells for better coverage
 				
-				for (int32 X = 0; X < CellsPerAxis; X += 2) // Skip some cells for performance
+				// Use denser spawning near player, sparser further away
+				int32 SpawnStep = (DistFromPlayer < SimulationRadius * 0.25f) ? 1 : 2;
+				
+				for (int32 X = 0; X < CellsPerAxis && SpawnedCells < MaxCellsPerChunk; X += SpawnStep)
 				{
-					for (int32 Y = 0; Y < CellsPerAxis; Y += 2)
+					for (int32 Y = 0; Y < CellsPerAxis && SpawnedCells < MaxCellsPerChunk; Y += SpawnStep)
 					{
 						FVector CellWorldPos = ChunkBounds.Min + FVector(X * SpawnSpacing, Y * SpawnSpacing, 0);
 						
@@ -1895,23 +2082,119 @@ void AVoxelFluidActor::ManageSimulationWaterAroundPlayer(const FVector& PlayerPo
 						// Spawn water if terrain is below water level
 						if (TerrainHeight < WaterLevel)
 						{
-							// Spawn at water level and a few cells below
-							for (int32 Z = 0; Z < 4; ++Z)
+							// Calculate proper water depth at this location
+							float WaterDepth = WaterLevel - TerrainHeight;
+							
+							// Fill cells from terrain up to water level for proper volume
+							int32 CellsToFill = FMath::CeilToInt(WaterDepth / CellSize);
+							for (int32 ZCell = 0; ZCell < CellsToFill && SpawnedCells < MaxCellsPerChunk; ++ZCell)
 							{
-								FVector SpawnPos = FVector(CellWorldPos.X, CellWorldPos.Y, WaterLevel - Z * CellSize);
-								if (SpawnPos.Z > TerrainHeight + CellSize/2)
+								float CellZ = TerrainHeight + (ZCell + 0.5f) * CellSize;
+								if (CellZ <= WaterLevel)
 								{
-									ChunkManager->AddFluidAtWorldPosition(SpawnPos, 1.0f);
+									FVector SpawnPos = FVector(CellWorldPos.X, CellWorldPos.Y, CellZ);
+									
+									// Use full fluid amount for proper water surface
+									float FluidAmount = 1.0f;
+									
+									// Top cell might be partial
+									if (CellZ + CellSize * 0.5f > WaterLevel)
+									{
+										FluidAmount = (WaterLevel - (CellZ - CellSize * 0.5f)) / CellSize;
+									}
+									
+									ChunkManager->AddFluidAtWorldPosition(SpawnPos, FluidAmount);
+									SpawnedCells++;
 								}
 							}
 						}
 					}
 				}
 				
-				UE_LOG(LogTemp, VeryVerbose, TEXT("VoxelFluidActor: Spawned water in chunk at %s"), *ChunkCenter.ToString());
+				// Mark this chunk as processed
+				ProcessedChunks.Add(ChunkCoord);
+				
+				UE_LOG(LogTemp, VeryVerbose, TEXT("VoxelFluidActor: Spawned %d water cells in chunk at %s"), 
+					SpawnedCells, *ChunkCenter.ToString());
+			}
+			else
+			{
+				// Still mark as processed even if it has water
+				ProcessedChunks.Add(ChunkCoord);
 			}
 		}
 	}
+	
+	// Clean up old processed chunks that are now far away
+	if (ProcessedChunks.Num() > 100) // Limit memory usage
+	{
+		TArray<FFluidChunkCoord> ChunksToRemove;
+		for (const FFluidChunkCoord& ProcessedCoord : ProcessedChunks)
+		{
+			// Calculate chunk world position manually
+			FVector ChunkWorldPos = FVector(
+				ProcessedCoord.X * ChunkSize * CellSize,
+				ProcessedCoord.Y * ChunkSize * CellSize,
+				ProcessedCoord.Z * ChunkSize * CellSize
+			);
+			
+			if (FVector::Dist(ChunkWorldPos, PlayerPos) > SimulationRadius * 2.0f)
+			{
+				ChunksToRemove.Add(ProcessedCoord);
+			}
+		}
+		for (const FFluidChunkCoord& CoordToRemove : ChunksToRemove)
+		{
+			ProcessedChunks.Remove(CoordToRemove);
+		}
+	}
+	*/
+}
+
+void AVoxelFluidActor::TestEditTriggeredActivation(const FVector& TestPosition, float TestRadius)
+{
+	UE_LOG(LogTemp, Warning, TEXT("=== Testing Edit-Triggered Activation ==="));
+	UE_LOG(LogTemp, Warning, TEXT("Position: %s, Radius: %.1f"), *TestPosition.ToString(), TestRadius);
+	UE_LOG(LogTemp, Warning, TEXT("Activation Mode: %s"), 
+		ChunkActivationMode == EChunkActivationMode::EditTriggered ? TEXT("Edit Triggered") :
+		ChunkActivationMode == EChunkActivationMode::DistanceBased ? TEXT("Distance Based") : 
+		TEXT("Hybrid"));
+	
+	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("ChunkManager not initialized!"));
+		return;
+	}
+	
+	// Get chunk stats before
+	int32 ChunksBefore = ChunkManager->GetLoadedChunkCount();
+	int32 ActiveBefore = ChunkManager->GetActiveChunkCount();
+	UE_LOG(LogTemp, Warning, TEXT("Before: %d loaded, %d active chunks"), ChunksBefore, ActiveBefore);
+	
+	// Simulate a terrain edit
+	UE_LOG(LogTemp, Warning, TEXT("Simulating terrain edit..."));
+	OnVoxelTerrainModified(TestPosition, TestRadius);
+	
+	// Force immediate update
+	ChunkManager->ForceUpdateChunkStates();
+	
+	// Get chunk stats after
+	int32 ChunksAfter = ChunkManager->GetLoadedChunkCount();
+	int32 ActiveAfter = ChunkManager->GetActiveChunkCount();
+	UE_LOG(LogTemp, Warning, TEXT("After: %d loaded, %d active chunks"), ChunksAfter, ActiveAfter);
+	
+	// Report results
+	if (ChunksAfter > ChunksBefore || ActiveAfter > ActiveBefore)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SUCCESS: Chunks were activated! (+%d loaded, +%d active)"), 
+			ChunksAfter - ChunksBefore, ActiveAfter - ActiveBefore);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("FAILED: No chunks were activated. Check configuration."));
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("=== Test Complete ==="));
 }
 
 void AVoxelFluidActor::SpawnSimulationWaterAroundPlayer()

@@ -67,7 +67,7 @@ public:
 	float MinFluidLevelToRender = 0.01f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization")
-	float MeshUpdateInterval = 0.033f;
+	float MeshUpdateInterval = 0.016f; // Reduced from 0.033f for smoother updates (60 FPS)
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization")
 	FLinearColor FluidColor = FLinearColor(0.0f, 0.5f, 1.0f, 0.7f);
@@ -91,13 +91,19 @@ public:
 	bool bUseLODForVisualization = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "0.0001", ClampMax = "1.0"))
-	float MarchingCubesIsoLevel = 0.01f;
+	float MarchingCubesIsoLevel = 0.1f; // Lowered to capture more water surface
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
 	bool bSmoothNormals = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
 	bool bGenerateCollision = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
+	bool bGenerateDoubleSidedGeometry = true; // Add double-sided geometry to fix missing faces
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float MeshSmoothingFactor = 0.5f; // Add smoothing to reduce floating cell artifacts
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
 	bool bFlipNormals = true;
