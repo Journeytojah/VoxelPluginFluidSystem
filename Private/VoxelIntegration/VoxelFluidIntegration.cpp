@@ -1140,7 +1140,7 @@ bool UVoxelFluidIntegration::QueryVoxelAtPosition(const FVector& WorldPosition, 
 bool UVoxelFluidIntegration::CheckIfCellIsSolid(const FVector& CellCenter, int32 GridX, int32 GridY, int32 GridZ)
 {
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_TerrainSampling);
-	INC_DWORD_STAT(STAT_VoxelFluid_TerrainQueries);
+	// INC_DWORD_STAT(STAT_VoxelFluid_TerrainQueries); // Hidden - not in top 20
 	
 	if (!IsVoxelWorldValid())
 	{

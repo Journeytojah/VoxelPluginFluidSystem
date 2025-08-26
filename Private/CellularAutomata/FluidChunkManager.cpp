@@ -76,8 +76,12 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 	{
 		ChunkUpdateTimer = 0.0f;
 
-		UpdateChunkStates(ViewerPositions);
-		UpdateChunkLODs(ViewerPositions);
+		// Skip chunk state updates if no viewer positions (edit-triggered mode)
+		if (ViewerPositions.Num() > 0)
+		{
+			UpdateChunkStates(ViewerPositions);
+			UpdateChunkLODs(ViewerPositions);
+		}
 
 		// Track queues for performance monitoring
 		int32 LoadQueueBefore = ChunkLoadQueue.IsEmpty() ? 0 : 1;
@@ -117,16 +121,16 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 		// === Chunk System Statistics ===
 		SET_DWORD_STAT(STAT_VoxelFluid_LoadedChunks, CachedStats.TotalChunks);
 		SET_DWORD_STAT(STAT_VoxelFluid_ActiveChunks, CachedStats.ActiveChunks);
-		SET_DWORD_STAT(STAT_VoxelFluid_InactiveChunks, CachedStats.InactiveChunks);
-		SET_DWORD_STAT(STAT_VoxelFluid_BorderOnlyChunks, CachedStats.BorderOnlyChunks);
-		SET_DWORD_STAT(STAT_VoxelFluid_ChunkLoadQueueSize, CachedStats.ChunkLoadQueueSize);
-		SET_DWORD_STAT(STAT_VoxelFluid_ChunkUnloadQueueSize, CachedStats.ChunkUnloadQueueSize);
-		SET_FLOAT_STAT(STAT_VoxelFluid_AvgChunkUpdateTime, CachedStats.AverageChunkUpdateTime);
+		// SET_DWORD_STAT(STAT_VoxelFluid_InactiveChunks, CachedStats.InactiveChunks); // Hidden - not in top 20
+		// SET_DWORD_STAT(STAT_VoxelFluid_BorderOnlyChunks, CachedStats.BorderOnlyChunks); // Hidden - not in top 20
+		// SET_DWORD_STAT(STAT_VoxelFluid_ChunkLoadQueueSize, CachedStats.ChunkLoadQueueSize); // Hidden - not in top 20
+		// SET_DWORD_STAT(STAT_VoxelFluid_ChunkUnloadQueueSize, CachedStats.ChunkUnloadQueueSize); // Hidden - not in top 20
+		// SET_FLOAT_STAT(STAT_VoxelFluid_AvgChunkUpdateTime, CachedStats.AverageChunkUpdateTime); // Hidden - not in top 20
 
 		// === Fluid Cell Statistics ===
 		SET_DWORD_STAT(STAT_VoxelFluid_ActiveCells, CachedStats.TotalActiveCells);
-		SET_DWORD_STAT(STAT_VoxelFluid_TotalCells, CachedStats.TotalChunks * ChunkSize * ChunkSize * ChunkSize);
-		SET_FLOAT_STAT(STAT_VoxelFluid_TotalVolume, CachedStats.TotalFluidVolume);
+		// SET_DWORD_STAT(STAT_VoxelFluid_TotalCells, CachedStats.TotalChunks * ChunkSize * ChunkSize * ChunkSize); // Hidden - use TotalVolume instead
+		// SET_FLOAT_STAT(STAT_VoxelFluid_TotalVolume, CachedStats.TotalFluidVolume); // Hidden - not in top 20
 
 		// Disabled expensive cell iteration that causes frame hitches
 		// This was iterating through every cell of every loaded chunk every second
@@ -157,37 +161,37 @@ void UFluidChunkManager::UpdateChunks(float DeltaTime, const TArray<FVector>& Vi
 		// 	}
 		// }
 
-		SET_DWORD_STAT(STAT_VoxelFluid_SignificantCells, 0);
-		SET_FLOAT_STAT(STAT_VoxelFluid_AvgFluidLevel, 0.0f);
+		// SET_DWORD_STAT(STAT_VoxelFluid_SignificantCells, 0); // Hidden - not critical
+		// SET_FLOAT_STAT(STAT_VoxelFluid_AvgFluidLevel, 0.0f); // Hidden - not critical
 
 		// === Player & World Information ===
 		if (ViewerPositions.Num() > 0)
 		{
 			const FVector& PlayerPos = ViewerPositions[0];
-			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosX, PlayerPos.X);
-			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosY, PlayerPos.Y);
-			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosZ, PlayerPos.Z);
+			// SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosX, PlayerPos.X); // Hidden - debug info only
+			// SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosY, PlayerPos.Y); // Hidden - debug info only
+			// SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosZ, PlayerPos.Z); // Hidden - debug info only
 		}
 		else
 		{
 			// Clear player position if no viewers
-			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosX, 0.0f);
-			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosY, 0.0f);
-			SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosZ, 0.0f);
+			// SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosX, 0.0f); // Hidden - debug info only
+			// SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosY, 0.0f); // Hidden - debug info only
+			// SET_FLOAT_STAT(STAT_VoxelFluid_PlayerPosZ, 0.0f); // Hidden - debug info only
 		}
 
-		SET_FLOAT_STAT(STAT_VoxelFluid_ActiveDistance, StreamingConfig.ActiveDistance);
-		SET_FLOAT_STAT(STAT_VoxelFluid_LoadDistance, StreamingConfig.LoadDistance);
-		SET_DWORD_STAT(STAT_VoxelFluid_CrossChunkFlow, bDebugCrossChunkFlow ? 1 : 0);
+		// SET_FLOAT_STAT(STAT_VoxelFluid_ActiveDistance, StreamingConfig.ActiveDistance); // Hidden - config data
+		// SET_FLOAT_STAT(STAT_VoxelFluid_LoadDistance, StreamingConfig.LoadDistance); // Hidden - config data
+		// SET_DWORD_STAT(STAT_VoxelFluid_CrossChunkFlow, bDebugCrossChunkFlow ? 1 : 0); // Hidden - debug flag
 
 		// === Persistence & Cache Statistics ===
-		SET_DWORD_STAT(STAT_VoxelFluid_CacheEntries, GetCacheSize());
-		SET_DWORD_STAT(STAT_VoxelFluid_CacheMemoryKB, GetCacheMemoryUsage());
-		SET_DWORD_STAT(STAT_VoxelFluid_ChunksSaved, ChunksSavedThisFrame);
-		SET_DWORD_STAT(STAT_VoxelFluid_ChunksLoaded, ChunksLoadedThisFrame);
+		// SET_DWORD_STAT(STAT_VoxelFluid_CacheEntries, GetCacheSize()); // Hidden - cache detail
+		// SET_DWORD_STAT(STAT_VoxelFluid_CacheMemoryKB, GetCacheMemoryUsage()); // Hidden - cache detail
+		// SET_DWORD_STAT(STAT_VoxelFluid_ChunksSaved, ChunksSavedThisFrame); // Hidden - cache detail
+		// SET_DWORD_STAT(STAT_VoxelFluid_ChunksLoaded, ChunksLoadedThisFrame); // Hidden - cache detail
 
 		// === Fluid Properties ===
-		SET_FLOAT_STAT(STAT_VoxelFluid_EvaporationRate, EvaporationRate);
+		// SET_FLOAT_STAT(STAT_VoxelFluid_EvaporationRate, EvaporationRate); // Hidden - fluid property
 
 		// Reset frame counters
 		ChunksSavedThisFrame = 0;
@@ -254,10 +258,10 @@ void UFluidChunkManager::UpdateSimulation(float DeltaTime)
 		}
 	}
 
-	SET_DWORD_STAT(STAT_VoxelFluid_TotalCells, TotalCells);
+	// SET_DWORD_STAT(STAT_VoxelFluid_TotalCells, TotalCells); // Hidden - use ActiveCells instead
 	SET_DWORD_STAT(STAT_VoxelFluid_ActiveCells, ActiveCells);
-	SET_DWORD_STAT(STAT_VoxelFluid_StaticWaterCells, StaticWaterCells);
-	SET_FLOAT_STAT(STAT_VoxelFluid_TotalVolume, TotalVolume);
+	// SET_DWORD_STAT(STAT_VoxelFluid_StaticWaterCells, StaticWaterCells); // Hidden - not in top 20
+	// SET_FLOAT_STAT(STAT_VoxelFluid_TotalVolume, TotalVolume); // Hidden - not in top 20
 
 
 	// Use optimized parallel processing

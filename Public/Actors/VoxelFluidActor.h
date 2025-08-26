@@ -123,11 +123,25 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
 	bool bUseFixedTimestep = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
-	int32 ChunkSize = 32;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (ClampMin = "16", ClampMax = "128"))
+	int32 ChunkSize = 32; // Reverted to standard size for performance
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
-	float CellSize = 100.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (ClampMin = "10.0", ClampMax = "200.0"))
+	float CellSize = 100.0f; // Reverted to 100cm for better performance
+	
+	// High Resolution Mode Settings
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "High Resolution Mode")
+	bool bUseHighResolution = false; // Disabled high resolution for better performance
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "High Resolution Mode", meta = (EditCondition = "bUseHighResolution", ClampMin = "0.25", ClampMax = "2.0"))
+	float WaterSpawnDensity = 1.0f; // Reset to normal density for better performance
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "High Resolution Mode", meta = (EditCondition = "bUseHighResolution", ClampMin = "0.0", ClampMax = "1.0"))
+	float WaterEdgeSmoothness = 0.2f; // Smoothness falloff at water edges
+	
+	// Disabled: VoxelPlugin requires game thread access for terrain sampling
+	// UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "High Resolution Mode", meta = (EditCondition = "bUseHighResolution"))
+	// bool bUseParallelTerrainSampling = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings")
 	float ChunkLoadDistance = 20000.0f; // Increased from 8000 for more distance
@@ -343,6 +357,10 @@ public:
 	// Debug function to test edit-triggered activation
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid Debug", meta = (CallInEditor = "true"))
 	void TestEditTriggeredActivation(const FVector& TestPosition, float TestRadius = 500.0f);
+	
+	// Debug function to identify stuttering source
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid Debug", meta = (CallInEditor = "true"))
+	void DebugStuttering();
 
 private:
 	void ManageSimulationWaterAroundPlayer(const FVector& PlayerPos);

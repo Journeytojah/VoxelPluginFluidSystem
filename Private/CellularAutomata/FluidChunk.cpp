@@ -435,6 +435,13 @@ void UFluidChunk::RemoveFluid(int32 LocalX, int32 LocalY, int32 LocalZ, float Am
 
 float UFluidChunk::GetFluidAt(int32 LocalX, int32 LocalY, int32 LocalZ) const
 {
+	// Critical safety check - prevent null pointer crashes during async mesh generation
+	if (Cells.Num() == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UFluidChunk::GetFluidAt - Cells array is empty for chunk"));
+		return 0.0f;
+	}
+	
 	const int32 Idx = GetLocalCellIndex(LocalX, LocalY, LocalZ);
 	// Add explicit bounds checking to prevent array access violations
 	if (Idx >= 0 && Idx < Cells.Num())

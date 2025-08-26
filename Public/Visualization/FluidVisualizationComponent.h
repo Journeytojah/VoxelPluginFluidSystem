@@ -130,7 +130,7 @@ public:
 	bool bEnableGapFilling = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes", meta = (ClampMin = "1", ClampMax = "4"))
-	int32 MarchingCubesResolutionMultiplier = 2;
+	int32 MarchingCubesResolutionMultiplier = 1; // Reduced from 2 to 1 for better performance
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marching Cubes")
 	bool bUseAdaptiveResolution = true;
@@ -139,7 +139,7 @@ public:
 	bool bUseAsyncMeshGeneration = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "1", ClampMax = "10"))
-	int32 MaxAsyncTasksPerFrame = 2;
+	int32 MaxAsyncTasksPerFrame = 1; // Reduced from 2 to 1 for better performance
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "0.001", ClampMax = "0.1"))
 	float MaxMeshGenerationTimePerFrame = 0.008f; // 8ms budget

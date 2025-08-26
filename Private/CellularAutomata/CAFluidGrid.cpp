@@ -110,8 +110,8 @@ void UCAFluidGrid::UpdateSimulation(float DeltaTime)
 		}
 	}
 	SET_DWORD_STAT(STAT_VoxelFluid_ActiveCells, ActiveCellCount);
-	SET_DWORD_STAT(STAT_VoxelFluid_TotalCells, Cells.Num());
-	SET_FLOAT_STAT(STAT_VoxelFluid_TotalVolume, TotalVolume);
+	// SET_DWORD_STAT(STAT_VoxelFluid_TotalCells, Cells.Num()); // Hidden - use ActiveCells instead
+	// SET_FLOAT_STAT(STAT_VoxelFluid_TotalVolume, TotalVolume); // Hidden - not in top 20
 	TotalSettledCells = SettledCellCount;
 
 	// Initialize update flags for this frame

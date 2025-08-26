@@ -5,190 +5,91 @@
 DECLARE_STATS_GROUP(TEXT("VoxelFluid"), STATGROUP_VoxelFluid, STATCAT_Advanced);
 
 // =====================================================
-//  PRIMARY METRICS - Always Show These
+//  TOP 20 CRITICAL STATS - Performance & Stuttering Debug
 // =====================================================
 
-// Performance Timing (Critical for optimization)
-DECLARE_CYCLE_STAT(TEXT("Total Update"), STAT_VoxelFluid_UpdateSimulation, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Chunk Update"), STAT_VoxelFluid_ChunkManagerUpdate, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Mesh Gen"), STAT_VoxelFluid_MarchingCubes, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Border Sync"), STAT_VoxelFluid_BorderSync, STATGROUP_VoxelFluid);
+// === CRITICAL PERFORMANCE TIMING (Stuttering Diagnosis) ===
+DECLARE_CYCLE_STAT(TEXT("[1] Total Update"), STAT_VoxelFluid_UpdateSimulation, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[2] Chunk Manager"), STAT_VoxelFluid_ChunkManagerUpdate, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[3] State Changes"), STAT_VoxelFluid_ChunkStateChange, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[4] Changes/Frame"), STAT_VoxelFluid_StateChangesPerFrame, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[5] Frame MS"), STAT_VoxelFluid_TotalFrameMS, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[6] FPS Impact"), STAT_VoxelFluid_FPSImpact, STATGROUP_VoxelFluid);
 
-// Resource Usage (Critical metrics)
-DECLARE_DWORD_COUNTER_STAT(TEXT("Active/Total Chunks"), STAT_VoxelFluid_ActiveChunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Total Chunks"), STAT_VoxelFluid_LoadedChunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Active Cells"), STAT_VoxelFluid_ActiveCells, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("Fluid Volume"), STAT_VoxelFluid_TotalVolume, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("Chunk Update MS"), STAT_VoxelFluid_AvgChunkUpdateTime, STATGROUP_VoxelFluid);
+// === RESOURCE TRACKING ===
+DECLARE_DWORD_COUNTER_STAT(TEXT("[7] Active Chunks"), STAT_VoxelFluid_ActiveChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[8] Total Chunks"), STAT_VoxelFluid_LoadedChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[9] Active Cells"), STAT_VoxelFluid_ActiveCells, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[10] Memory MB"), STAT_VoxelFluid_TotalMemoryMB, STATGROUP_VoxelFluid);
 
-// Memory (Critical for high-res optimization)
-DECLARE_DWORD_COUNTER_STAT(TEXT("Memory MB"), STAT_VoxelFluid_TotalMemoryMB, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Cache KB"), STAT_VoxelFluid_CacheMemoryKB, STATGROUP_VoxelFluid);
+// === HYBRID SYSTEM BALANCE ===
+DECLARE_DWORD_COUNTER_STAT(TEXT("[11] Sim Chunks"), STAT_VoxelFluid_SimulationChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[12] Static Chunks"), STAT_VoxelFluid_HybridStaticChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[13] Static Render"), STAT_VoxelFluid_StaticRenderChunks, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("[14] Sim/Static Ratio"), STAT_VoxelFluid_SimStaticRatio, STATGROUP_VoxelFluid);
 
-// =====================================================
-//  SECONDARY METRICS - Detailed Analysis
-// =====================================================
+// === CRITICAL TIMING BOTTLENECKS ===
+DECLARE_CYCLE_STAT(TEXT("[15] Terrain Sampling"), STAT_VoxelFluid_TerrainSampling, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[16] Mesh Gen"), STAT_VoxelFluid_MarchingCubes, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[17] Static Apply"), STAT_VoxelFluid_StaticWaterApply, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[18] Chunk Streaming"), STAT_VoxelFluid_ChunkStreaming, STATGROUP_VoxelFluid);
 
-// Simulation Components
-DECLARE_CYCLE_STAT(TEXT("Gravity"), STAT_VoxelFluid_ApplyGravity, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Flow"), STAT_VoxelFluid_ApplyFlowRules, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Pressure"), STAT_VoxelFluid_ApplyPressure, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Velocity"), STAT_VoxelFluid_UpdateVelocities, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Streaming"), STAT_VoxelFluid_ChunkStreaming, STATGROUP_VoxelFluid);
-
-// Rendering
-DECLARE_CYCLE_STAT(TEXT("Visualization"), STAT_VoxelFluid_Visualization, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Rendered"), STAT_VoxelFluid_RenderedChunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Cached Mesh"), STAT_VoxelFluid_CachedMeshes, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Gen Mesh"), STAT_VoxelFluid_GeneratedMeshes, STATGROUP_VoxelFluid);
-
-// Chunk States
-DECLARE_DWORD_COUNTER_STAT(TEXT("Inactive"), STAT_VoxelFluid_InactiveChunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Border"), STAT_VoxelFluid_BorderOnlyChunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Load Q"), STAT_VoxelFluid_ChunkLoadQueueSize, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Unload Q"), STAT_VoxelFluid_ChunkUnloadQueueSize, STATGROUP_VoxelFluid);
-
-// LOD
-DECLARE_DWORD_COUNTER_STAT(TEXT("LOD0"), STAT_VoxelFluid_LOD0Meshes, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("LOD1"), STAT_VoxelFluid_LOD1Meshes, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("LOD2"), STAT_VoxelFluid_LOD2Meshes, STATGROUP_VoxelFluid);
+// === SYSTEM HEALTH ===
+DECLARE_DWORD_COUNTER_STAT(TEXT("[19] Rendered"), STAT_VoxelFluid_RenderedChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("[20] Active Regions"), STAT_VoxelFluid_ActiveRegions, STATGROUP_VoxelFluid);
 
 // =====================================================
-//  DEBUG METRICS - Usually Hidden
+//  HIDDEN STATS (Declared but not displayed)
 // =====================================================
+// These stats are declared for code compatibility but won't show in stat voxelfluid
+// unless specifically requested. They use "_" prefix to sort them below the main 20.
 
-// Integration
-DECLARE_CYCLE_STAT(TEXT("VoxelIntegration"), STAT_VoxelFluid_VoxelIntegration, STATGROUP_VoxelFluid);
+// Still used in code - keep declarations for compilation
+DECLARE_FLOAT_COUNTER_STAT(TEXT("_Total Volume"), STAT_VoxelFluid_TotalVolume, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_Inactive Chunks"), STAT_VoxelFluid_InactiveChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_Border Chunks"), STAT_VoxelFluid_BorderOnlyChunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_Load Queue"), STAT_VoxelFluid_ChunkLoadQueueSize, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_Unload Queue"), STAT_VoxelFluid_ChunkUnloadQueueSize, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("_Chunk Update Time"), STAT_VoxelFluid_AvgChunkUpdateTime, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_Static Water Cells"), STAT_VoxelFluid_StaticWaterCells, STATGROUP_VoxelFluid);
 
-// Detailed Cell Info
-DECLARE_DWORD_COUNTER_STAT(TEXT("Total Cells"), STAT_VoxelFluid_TotalCells, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Significant"), STAT_VoxelFluid_SignificantCells, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("Avg Level"), STAT_VoxelFluid_AvgFluidLevel, STATGROUP_VoxelFluid);
+// Simulation detail stats
+DECLARE_CYCLE_STAT(TEXT("_Apply Gravity"), STAT_VoxelFluid_ApplyGravity, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("_Apply Flow Rules"), STAT_VoxelFluid_ApplyFlowRules, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("_Apply Pressure"), STAT_VoxelFluid_ApplyPressure, STATGROUP_VoxelFluid);
 
-// Player Position
-DECLARE_FLOAT_COUNTER_STAT(TEXT("Player X"), STAT_VoxelFluid_PlayerPosX, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("Player Y"), STAT_VoxelFluid_PlayerPosY, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("Player Z"), STAT_VoxelFluid_PlayerPosZ, STATGROUP_VoxelFluid);
+// Visualization detail stats
+DECLARE_CYCLE_STAT(TEXT("_Visualization"), STAT_VoxelFluid_Visualization, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_Cached Meshes"), STAT_VoxelFluid_CachedMeshes, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_Generated Meshes"), STAT_VoxelFluid_GeneratedMeshes, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_LOD0 Meshes"), STAT_VoxelFluid_LOD0Meshes, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_LOD1 Meshes"), STAT_VoxelFluid_LOD1Meshes, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_LOD2 Meshes"), STAT_VoxelFluid_LOD2Meshes, STATGROUP_VoxelFluid);
 
-// Settings
-DECLARE_FLOAT_COUNTER_STAT(TEXT("Active Dist"), STAT_VoxelFluid_ActiveDistance, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("Load Dist"), STAT_VoxelFluid_LoadDistance, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Cross Flow"), STAT_VoxelFluid_CrossChunkFlow, STATGROUP_VoxelFluid);
+// Static water detail stats
+DECLARE_DWORD_COUNTER_STAT(TEXT("_Static LOD0 Chunks"), STAT_VoxelFluid_StaticLOD0Chunks, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_Static LOD1+ Chunks"), STAT_VoxelFluid_StaticLOD1PlusChunks, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("_Static Ring Inner Radius"), STAT_VoxelFluid_StaticRingInnerRadius, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("_Static Ring Outer Radius"), STAT_VoxelFluid_StaticRingOuterRadius, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_Transition Chunks"), STAT_VoxelFluid_TransitionChunks, STATGROUP_VoxelFluid);
 
-// Cache
-DECLARE_DWORD_COUNTER_STAT(TEXT("Cache Count"), STAT_VoxelFluid_CacheEntries, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Saved"), STAT_VoxelFluid_ChunksSaved, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Loaded"), STAT_VoxelFluid_ChunksLoaded, STATGROUP_VoxelFluid);
+// Performance detail stats
+DECLARE_FLOAT_COUNTER_STAT(TEXT("_Sim MS/Chunk"), STAT_VoxelFluid_SimMSPerChunk, STATGROUP_VoxelFluid);
+DECLARE_FLOAT_COUNTER_STAT(TEXT("_Static MS/Chunk"), STAT_VoxelFluid_StaticMSPerChunk, STATGROUP_VoxelFluid);
 
-// Sources
-DECLARE_DWORD_COUNTER_STAT(TEXT("Sources"), STAT_VoxelFluid_ActiveSources, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("Flow Rate"), STAT_VoxelFluid_TotalSourceFlow, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("Evaporation"), STAT_VoxelFluid_EvaporationRate, STATGROUP_VoxelFluid);
+// Integration stats
+DECLARE_CYCLE_STAT(TEXT("_Voxel Integration"), STAT_VoxelFluid_VoxelIntegration, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("_Terrain Refresh"), STAT_VoxelFluid_TerrainRefresh, STATGROUP_VoxelFluid);
+DECLARE_DWORD_COUNTER_STAT(TEXT("_Terrain Queries"), STAT_VoxelFluid_TerrainQueries, STATGROUP_VoxelFluid);
 
-// Memory Details
-DECLARE_DWORD_COUNTER_STAT(TEXT("Mesh Mem MB"), STAT_VoxelFluid_MeshMemoryMB, STATGROUP_VoxelFluid);
+// Chunk system detail stats
+DECLARE_CYCLE_STAT(TEXT("_Chunk Unload"), STAT_VoxelFluid_ChunkUnload, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("_Border Sync"), STAT_VoxelFluid_BorderSync, STATGROUP_VoxelFluid);
 
-// Sparse Grid Stats
-DECLARE_CYCLE_STAT(TEXT("Convert To Sparse"), STAT_VoxelFluid_ConvertToSparse, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Convert To Dense"), STAT_VoxelFluid_ConvertToDense, STATGROUP_VoxelFluid);
+// Source detail stats  
+DECLARE_CYCLE_STAT(TEXT("_Fluid Source Update"), STAT_VoxelFluid_FluidSourceUpdate, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("_Dynamic Refill"), STAT_VoxelFluid_DynamicRefill, STATGROUP_VoxelFluid);
 
-// =====================================================
-//  PERFORMANCE CRITICAL PATH METRICS
-// =====================================================
-
-// Hot Path Timing - Most Important for Frame Rate
-DECLARE_CYCLE_STAT(TEXT("[CRITICAL] Terrain Sampling"), STAT_VoxelFluid_TerrainSampling, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("[CRITICAL] Cell Updates"), STAT_VoxelFluid_CellUpdates, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("[CRITICAL] Physics Solver"), STAT_VoxelFluid_PhysicsSolver, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("[CRITICAL] Mesh Building"), STAT_VoxelFluid_MeshBuilding, STATGROUP_VoxelFluid);
-
-// Static Water System Performance
-DECLARE_CYCLE_STAT(TEXT("Static Water Apply"), STAT_VoxelFluid_StaticWaterApply, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Dynamic Refill"), STAT_VoxelFluid_DynamicRefill, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Static Regions"), STAT_VoxelFluid_StaticWaterRegions, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Static Cells"), STAT_VoxelFluid_StaticWaterCells, STATGROUP_VoxelFluid);
-
-// Detailed Simulation Breakdown
-DECLARE_CYCLE_STAT(TEXT("Fluid Source Update"), STAT_VoxelFluid_FluidSourceUpdate, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Settling Detection"), STAT_VoxelFluid_SettlingDetection, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Cross-Chunk Flow"), STAT_VoxelFluid_CrossChunkFlowTime, STATGROUP_VoxelFluid);
-
-// Memory Allocation Tracking
-DECLARE_CYCLE_STAT(TEXT("Memory Alloc"), STAT_VoxelFluid_MemoryAllocation, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Allocs/Frame"), STAT_VoxelFluid_AllocsPerFrame, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Peak Cells"), STAT_VoxelFluid_PeakActiveCells, STATGROUP_VoxelFluid);
-
-// Terrain Integration Cost
-DECLARE_CYCLE_STAT(TEXT("Terrain Refresh"), STAT_VoxelFluid_TerrainRefresh, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Voxel World Sync"), STAT_VoxelFluid_VoxelWorldSync, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Terrain Queries"), STAT_VoxelFluid_TerrainQueries, STATGROUP_VoxelFluid);
-
-// Chunk System Deep Metrics
-DECLARE_CYCLE_STAT(TEXT("Chunk Load"), STAT_VoxelFluid_ChunkLoad, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Chunk Unload"), STAT_VoxelFluid_ChunkUnload, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Chunk State Change"), STAT_VoxelFluid_ChunkStateChange, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("State Changes/Frame"), STAT_VoxelFluid_StateChangesPerFrame, STATGROUP_VoxelFluid);
-
-// Frame Timing Breakdown (Top Bottlenecks)
-DECLARE_FLOAT_COUNTER_STAT(TEXT("[TOP] Simulation %"), STAT_VoxelFluid_SimulationPercent, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("[TOP] Rendering %"), STAT_VoxelFluid_RenderingPercent, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("[TOP] Terrain %"), STAT_VoxelFluid_TerrainPercent, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("[TOP] Memory %"), STAT_VoxelFluid_MemoryPercent, STATGROUP_VoxelFluid);
-
-// =====================================================
-//  PERFORMANCE OPTIMIZATION METRICS
-// =====================================================
-
-// Frustum Culling & Performance States
-DECLARE_CYCLE_STAT(TEXT("Frustum Culling"), STAT_VoxelFluid_FrustumCulling, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Performance Update"), STAT_VoxelFluid_PerformanceStateUpdate, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Culled Chunks"), STAT_VoxelFluid_CulledChunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("In Frustum"), STAT_VoxelFluid_FrustumChunks, STATGROUP_VoxelFluid);
-
-// Static Water Optimization
-DECLARE_DWORD_COUNTER_STAT(TEXT("Static Water Chunks"), STAT_VoxelFluid_StaticWaterChunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Hibernated Chunks"), STAT_VoxelFluid_HibernatedChunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Low Priority"), STAT_VoxelFluid_LowPriorityChunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Skipped Updates"), STAT_VoxelFluid_SkippedUpdates, STATGROUP_VoxelFluid);
-
-// Octree Optimization
-DECLARE_CYCLE_STAT(TEXT("Octree Query"), STAT_VoxelFluid_OctreeQuery, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("Octree Update"), STAT_VoxelFluid_OctreeUpdate, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Octree Nodes"), STAT_VoxelFluid_OctreeNodes, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("Octree Depth"), STAT_VoxelFluid_OctreeDepth, STATGROUP_VoxelFluid);
-
-// Performance Timing Savings
-DECLARE_FLOAT_COUNTER_STAT(TEXT("Time Saved MS"), STAT_VoxelFluid_TimeSavedMS, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("Optimization %"), STAT_VoxelFluid_OptimizationPercent, STATGROUP_VoxelFluid);
-
-// =====================================================
-//  HYBRID WATER SYSTEM METRICS - NEW!
-// =====================================================
-
-// Static Water Rendering
-DECLARE_CYCLE_STAT(TEXT("[STATIC] Render Update"), STAT_VoxelFluid_StaticRenderUpdate, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("[STATIC] Mesh Generation"), STAT_VoxelFluid_StaticMeshGen, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("[STATIC] Render Chunks"), STAT_VoxelFluid_StaticRenderChunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("[STATIC] LOD0 Chunks"), STAT_VoxelFluid_StaticLOD0Chunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("[STATIC] LOD1+ Chunks"), STAT_VoxelFluid_StaticLOD1PlusChunks, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("[STATIC] Ring Inner Radius"), STAT_VoxelFluid_StaticRingInnerRadius, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("[STATIC] Ring Outer Radius"), STAT_VoxelFluid_StaticRingOuterRadius, STATGROUP_VoxelFluid);
-
-// Simulation vs Static Distribution
-DECLARE_DWORD_COUNTER_STAT(TEXT("[HYBRID] Sim Chunks"), STAT_VoxelFluid_SimulationChunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("[HYBRID] Static Chunks"), STAT_VoxelFluid_HybridStaticChunks, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("[HYBRID] Transition Chunks"), STAT_VoxelFluid_TransitionChunks, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("[HYBRID] Sim/Static Ratio"), STAT_VoxelFluid_SimStaticRatio, STATGROUP_VoxelFluid);
-
-// Water Activation System
-DECLARE_CYCLE_STAT(TEXT("[ACTIVATE] Region Check"), STAT_VoxelFluid_ActivationCheck, STATGROUP_VoxelFluid);
-DECLARE_CYCLE_STAT(TEXT("[ACTIVATE] Water Spawn"), STAT_VoxelFluid_WaterSpawn, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("[ACTIVATE] Active Regions"), STAT_VoxelFluid_ActiveRegions, STATGROUP_VoxelFluid);
-DECLARE_DWORD_COUNTER_STAT(TEXT("[ACTIVATE] Pending Activations"), STAT_VoxelFluid_PendingActivations, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("[ACTIVATE] Spawn Rate/s"), STAT_VoxelFluid_WaterSpawnRate, STATGROUP_VoxelFluid);
-
-// Performance Comparison
-DECLARE_FLOAT_COUNTER_STAT(TEXT("[PERF] Sim MS/Chunk"), STAT_VoxelFluid_SimMSPerChunk, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("[PERF] Static MS/Chunk"), STAT_VoxelFluid_StaticMSPerChunk, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("[PERF] Total Frame MS"), STAT_VoxelFluid_TotalFrameMS, STATGROUP_VoxelFluid);
-DECLARE_FLOAT_COUNTER_STAT(TEXT("[PERF] FPS Impact"), STAT_VoxelFluid_FPSImpact, STATGROUP_VoxelFluid);
+// Sparse grid conversion stats
+DECLARE_CYCLE_STAT(TEXT("_Convert To Sparse"), STAT_VoxelFluid_ConvertToSparse, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("_Convert To Dense"), STAT_VoxelFluid_ConvertToDense, STATGROUP_VoxelFluid);

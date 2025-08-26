@@ -711,7 +711,12 @@ float FMarchingCubes::TrilinearInterpolate(const TArray<float>& DensityGrid, con
 float FMarchingCubes::SampleDensityInterpolated(UFluidChunk* FluidChunk, UFluidChunkManager* ChunkManager,
                                               const FVector& LocalPosition)
 {
-    if (!FluidChunk)
+    // Critical safety checks - prevent crashes during runtime edits
+    if (!FluidChunk || !IsValid(FluidChunk))
+        return 0.0f;
+        
+    // Ensure chunk data is properly initialized
+    if (FluidChunk->Cells.Num() == 0)
         return 0.0f;
     
     const float CellSize = FluidChunk->CellSize;

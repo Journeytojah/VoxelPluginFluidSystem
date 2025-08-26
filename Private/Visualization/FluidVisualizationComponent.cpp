@@ -1123,11 +1123,11 @@ void UFluidVisualizationComponent::GenerateChunkedMarchingCubes()
 	
 	// === Update Rendering Statistics ===
 	SET_DWORD_STAT(STAT_VoxelFluid_RenderedChunks, RenderedChunks);
-	SET_DWORD_STAT(STAT_VoxelFluid_CachedMeshes, CachedMeshesUsed);
-	SET_DWORD_STAT(STAT_VoxelFluid_GeneratedMeshes, MeshesGenerated);
-	SET_DWORD_STAT(STAT_VoxelFluid_LOD0Meshes, LOD0Meshes);
-	SET_DWORD_STAT(STAT_VoxelFluid_LOD1Meshes, LOD1Meshes);
-	SET_DWORD_STAT(STAT_VoxelFluid_LOD2Meshes, LOD2Meshes);
+	// SET_DWORD_STAT(STAT_VoxelFluid_CachedMeshes, CachedMeshesUsed); // Hidden - not in top 20
+	// SET_DWORD_STAT(STAT_VoxelFluid_GeneratedMeshes, MeshesGenerated); // Hidden - not in top 20
+	// SET_DWORD_STAT(STAT_VoxelFluid_LOD0Meshes, LOD0Meshes); // Hidden - not in top 20
+	// SET_DWORD_STAT(STAT_VoxelFluid_LOD1Meshes, LOD1Meshes); // Hidden - not in top 20
+	// SET_DWORD_STAT(STAT_VoxelFluid_LOD2Meshes, LOD2Meshes); // Hidden - not in top 20
 	
 	// Log performance info periodically
 	static float LastLogTime = 0.0f;
@@ -1463,10 +1463,11 @@ void UFluidVisualizationComponent::StartAsyncMeshGeneration(UFluidChunk* Chunk, 
 	float IsoLevel = NewTask->IsoLevel;
 	bool bFlipNorms = bFlipNormals;
 	
-	// Launch async task
+	// Launch async task - Add validation to prevent crashes on runtime edits
 	Async(EAsyncExecution::TaskGraph, [NewTask, ChunkPtr, ChunkMgrPtr, LODLevel, ResMultiplier, IsoLevel, bFlipNorms]()
 	{
-		if (!ChunkPtr || !ChunkMgrPtr)
+		// CRITICAL: Validate objects before accessing - prevent crash on runtime edits
+		if (!ChunkPtr || !ChunkMgrPtr || !IsValid(ChunkPtr) || !IsValid(ChunkMgrPtr))
 		{
 			NewTask->bCompleted = true;
 			return;
