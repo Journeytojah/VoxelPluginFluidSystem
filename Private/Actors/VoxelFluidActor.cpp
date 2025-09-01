@@ -1,8 +1,8 @@
 #include "Actors/VoxelFluidActor.h"
+#include "Actors/VoxelStaticWaterActor.h"
 #include "CellularAutomata/FluidChunkManager.h"
 #include "CellularAutomata/FluidChunk.h"
 #include "CellularAutomata/CAFluidGrid.h"
-#include "CellularAutomata/StaticWaterBody.h"
 #include "VoxelIntegration/VoxelFluidIntegration.h"
 #include "VoxelFluidStats.h"
 #include "VoxelFluidDebug.h"
@@ -18,6 +18,8 @@
 #include "UObject/ConstructorHelpers.h"
 #include "VoxelFluidStats.h"
 #include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
+#include "EngineUtils.h"
 
 
 AVoxelFluidActor::AVoxelFluidActor()
@@ -64,9 +66,6 @@ AVoxelFluidActor::AVoxelFluidActor()
 	VisualizationComponent = CreateDefaultSubobject<UFluidVisualizationComponent>(TEXT("VisualizationComponent"));
 	VisualizationComponent->SetupAttachment(RootComponent);
 
-	StaticWaterManager = CreateDefaultSubobject<UStaticWaterManager>(TEXT("StaticWaterManager"));
-
-	// Create new static water system components
 	StaticWaterGenerator = CreateDefaultSubobject<UStaticWaterGenerator>(TEXT("StaticWaterGenerator"));
 	StaticWaterRenderer = CreateDefaultSubobject<UStaticWaterRenderer>(TEXT("StaticWaterRenderer"));
 	WaterActivationManager = CreateDefaultSubobject<UWaterActivationManager>(TEXT("WaterActivationManager"));
@@ -95,130 +94,67 @@ AVoxelFluidActor::AVoxelFluidActor()
 	FluidDensityMultiplier = 1.0f;
 	
 	// Initialize high resolution settings
-	bUseHighResolution = true;
-	WaterSpawnDensity = 0.5f;
-	WaterEdgeSmoothness = 0.2f;
+	// Static water properties removed - now handled by AVoxelStaticWaterActor
+	// bUseHighResolution = true;
+	// WaterSpawnDensity = 0.5f;
+	// WaterEdgeSmoothness = 0.2f;
 	// bUseParallelTerrainSampling = false; // Disabled - VoxelPlugin requires game thread
 
-	// Initialize static water properties
-	bEnableStaticWater = false;
-	bShowStaticWaterBounds = false;
-	bAutoCreateOcean = false;
-	OceanWaterLevel = 0.0f;
-	OceanSize = 100000.0f;
+	// Initialize dynamic water activation properties
+	bAcceptStaticWaterActivation = true;
+	StaticToDynamicConversionRate = 10.0f;
 }
 
 void AVoxelFluidActor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// Ensure StaticWaterManager exists (needed for Blueprint-derived actors)
-	if (!StaticWaterManager)
+	// Link with static water actor if one exists in the scene
+	if (!LinkedStaticWaterActor)
 	{
-		StaticWaterManager = NewObject<UStaticWaterManager>(this, UStaticWaterManager::StaticClass(), TEXT("StaticWaterManager"));
-	}
-
-	// Initialize new static water system components if they don't exist
-	if (!StaticWaterGenerator)
-	{
-		StaticWaterGenerator = NewObject<UStaticWaterGenerator>(this, UStaticWaterGenerator::StaticClass(), TEXT("StaticWaterGenerator"));
-	}
-	if (!StaticWaterRenderer)
-	{
-		StaticWaterRenderer = NewObject<UStaticWaterRenderer>(this, UStaticWaterRenderer::StaticClass(), TEXT("StaticWaterRenderer"));
-	}
-	if (!WaterActivationManager)
-	{
-		WaterActivationManager = NewObject<UWaterActivationManager>(this, UWaterActivationManager::StaticClass(), TEXT("WaterActivationManager"));
-	}
-
-	// Ensure ocean water level is at a reasonable height (below typical terrain)
-	if (OceanWaterLevel >= 0.0f)
-	{
-		OceanWaterLevel = -500.0f; // Set below terrain to avoid floating water
+		// Try to find a static water actor in the scene
+		TArray<AActor*> FoundActors;
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVoxelStaticWaterActor::StaticClass(), FoundActors);
+		if (FoundActors.Num() > 0)
+		{
+			LinkedStaticWaterActor = Cast<AVoxelStaticWaterActor>(FoundActors[0]);
+			if (LinkedStaticWaterActor)
+			{
+				LinkedStaticWaterActor->SetFluidActor(this);
+				UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Linked with static water actor %s"), *LinkedStaticWaterActor->GetName());
+			}
+		}
 	}
 
 	InitializeFluidSystem();
-
-	// Connect new static water systems
-	if (StaticWaterGenerator && TargetVoxelWorld)
-	{
-		StaticWaterGenerator->SetVoxelWorld(TargetVoxelWorld);
-	}
-	if (StaticWaterRenderer && StaticWaterGenerator)
-	{
-		StaticWaterRenderer->SetWaterGenerator(StaticWaterGenerator);
-	}
-	if (StaticWaterRenderer && VoxelIntegration)
-	{
-		StaticWaterRenderer->SetVoxelIntegration(VoxelIntegration);
-	}
-	if (WaterActivationManager)
-	{
-		WaterActivationManager->SetStaticWaterGenerator(StaticWaterGenerator);
-		WaterActivationManager->SetStaticWaterRenderer(StaticWaterRenderer);
-		WaterActivationManager->SetFluidChunkManager(ChunkManager);
-		// FluidGrid is not used in this system currently
-		// WaterActivationManager->SetFluidGrid(FluidGrid);
-	}
 
 	if (bAutoStart)
 	{
 		StartSimulation();
 	}
 
-	// Set up the new static water system after terrain system is initialized
-	if (bEnableStaticWater)
+	// Force load chunks in distance-based mode
+	if (ChunkManager && ChunkActivationMode == EChunkActivationMode::DistanceBased)
 	{
 		FTimerHandle TimerHandle;
 		GetWorld()->GetTimerManager().SetTimer(TimerHandle, [this]()
 		{
-			// Setup the test water system first (enables debug vis and logging)
-			SetupTestWaterSystem();
+			TArray<FVector> ViewerPositions = GetViewerPositions();
+			// Force an update to load chunks
+			ChunkManager->UpdateChunks(0.1f, ViewerPositions);
 			
-			// Only force load chunks in distance-based mode
-			if (ChunkManager && ChunkActivationMode == EChunkActivationMode::DistanceBased)
+			// Make sure simulation is running
+			if (!bIsSimulating)
 			{
-				TArray<FVector> ViewerPositions = GetViewerPositions();
-				
-				// Force an update to load chunks
-				ChunkManager->UpdateChunks(0.1f, ViewerPositions);
+				StartSimulation();
+				UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Started fluid simulation"));
 			}
 			
-			// Create ocean using the new static water system
-			if (bAutoCreateOcean)
+			// Only spawn initial water in distance-based mode
+			if (ChunkActivationMode == EChunkActivationMode::DistanceBased)
 			{
-				CreateTestOcean();
+				SpawnDynamicWaterAroundPlayer();
 			}
-			
-			// Enable auto-tracking and start simulation after a slight delay  
-			FTimerHandle TrackingTimer;
-			GetWorld()->GetTimerManager().SetTimer(TrackingTimer, [this]()
-			{
-				// Make sure simulation is running
-				if (!bIsSimulating)
-				{
-					StartSimulation();
-					UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Started fluid simulation"));
-				}
-				
-				if (StaticWaterRenderer)
-				{
-					// Set the minimum render distance for the ring
-					StaticWaterRenderer->RenderSettings.MinRenderDistance = 3000.0f;
-					// Static water needs auto-tracking to render properly
-					StaticWaterRenderer->EnableAutoTracking(true);
-					UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Auto-tracking enabled, min distance: %.1f"), 
-						StaticWaterRenderer->RenderSettings.MinRenderDistance);
-				}
-				
-				// Only spawn initial water in distance-based mode
-				if (ChunkActivationMode == EChunkActivationMode::DistanceBased)
-				{
-					SpawnSimulationWaterAroundPlayer();
-				}
-			}, 1.0f, false);
-			
 		}, 1.0f, false); // Wait 1 second for terrain to be ready
 	}
 
@@ -261,55 +197,13 @@ void AVoxelFluidActor::Tick(float DeltaTime)
 				{
 					PlayerPos = PlayerPawn->GetActorLocation();
 					
-					// Update static water renderer to follow player
-					if (StaticWaterRenderer && StaticWaterRenderer->bAutoTrackPlayer)
-					{
-						// This already happens in StaticWaterRenderer's tick
-					}
+					// Static water and hybrid system stats now handled by AVoxelStaticWaterActor
 					
-					// Manage simulation water around player
-					if (bEnableStaticWater && ChunkManager)
-					{
-						ManageSimulationWaterAroundPlayer(PlayerPos);
-					}
-					
-					// Update hybrid system stats
-					if (StaticWaterRenderer)
-					{
-						// Static water rendering stats
-						SET_DWORD_STAT(STAT_VoxelFluid_StaticRenderChunks, StaticWaterRenderer->GetActiveRenderChunkCount());
-						
-						// Get LOD distribution
-						int32 LOD0Count, LOD1Count, LOD2Count;
-						StaticWaterRenderer->GetLODStatistics(LOD0Count, LOD1Count, LOD2Count);
-						SET_DWORD_STAT(STAT_VoxelFluid_StaticLOD0Chunks, LOD0Count);
-						SET_DWORD_STAT(STAT_VoxelFluid_StaticLOD1PlusChunks, LOD1Count + LOD2Count);
-						
-						// Ring rendering stats  
-						SET_FLOAT_STAT(STAT_VoxelFluid_StaticRingInnerRadius, StaticWaterRenderer->RenderSettings.MinRenderDistance);
-						SET_FLOAT_STAT(STAT_VoxelFluid_StaticRingOuterRadius, StaticWaterRenderer->RenderSettings.MaxRenderDistance);
-					}
-					
-					// Hybrid system distribution stats
-					if (ChunkManager && StaticWaterRenderer)
+					// Dynamic simulation stats
+					if (ChunkManager)
 					{
 						int32 SimChunks = ChunkManager->GetActiveChunkCount();
-						int32 StaticChunks = StaticWaterRenderer->GetActiveRenderChunkCount();
-						
 						SET_DWORD_STAT(STAT_VoxelFluid_SimulationChunks, SimChunks);
-						SET_DWORD_STAT(STAT_VoxelFluid_HybridStaticChunks, StaticChunks);
-						SET_DWORD_STAT(STAT_VoxelFluid_TransitionChunks, 0); // Would need to track transition chunks
-						
-						// Calculate coverage ratio
-						float SimToStaticRatio = StaticChunks > 0 ? (float)SimChunks / (float)StaticChunks : 0.0f;
-						SET_FLOAT_STAT(STAT_VoxelFluid_SimStaticRatio, SimToStaticRatio);
-					}
-					
-					// Water activation stats
-					if (WaterActivationManager)
-					{
-						SET_DWORD_STAT(STAT_VoxelFluid_ActiveRegions, WaterActivationManager->GetActiveRegionCount());
-						// SET_FLOAT_STAT(STAT_VoxelFluid_WaterSpawnRate, WaterActivationManager->GetSpawnRate());
 					}
 				}
 			}
@@ -361,11 +255,11 @@ void AVoxelFluidActor::Tick(float DeltaTime)
 		}
 	}
 
-	// Update static water rendering performance stats
-	if (StaticWaterRenderer)
+	// Static water rendering performance stats now handled by AVoxelStaticWaterActor
+	if (false) // StaticWaterRenderer removed
 	{
 		// Static water rendering is much cheaper - estimate based on chunk count
-		int32 StaticChunks = StaticWaterRenderer->GetActiveRenderChunkCount();
+		int32 StaticChunks = 0; // StaticWaterRenderer->GetActiveRenderChunkCount();
 		if (StaticChunks > 0)
 		{
 			// Static water typically takes ~0.01-0.05ms per chunk for simple mesh rendering
@@ -418,16 +312,39 @@ void AVoxelFluidActor::InitializeFluidSystem()
 {
 	InitializeChunkSystem();
 
+	// Try to auto-link with static water actor if not already linked
+	if (!LinkedStaticWaterActor)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			for (TActorIterator<AVoxelStaticWaterActor> ActorIterator(World); ActorIterator; ++ActorIterator)
+			{
+				AVoxelStaticWaterActor* StaticWaterActor = *ActorIterator;
+				if (StaticWaterActor && IsValid(StaticWaterActor))
+				{
+					// Link the actors together
+					LinkedStaticWaterActor = StaticWaterActor;
+					StaticWaterActor->SetFluidActor(this);
+					
+					UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Auto-linked to VoxelStaticWaterActor: %s"), 
+						*StaticWaterActor->GetName());
+					break;
+				}
+			}
+		}
+	}
+
 	if (VoxelIntegration && ChunkManager)
 	{
 		VoxelIntegration->SetChunkManager(ChunkManager);
 		VoxelIntegration->CellWorldSize = CellSize;
 
-		// Set static water manager if enabled
-		if (StaticWaterManager && bEnableStaticWater)
+		// Set static water generator if enabled
+		// TODO: Fix ChunkManager to use StaticWaterGenerator instead of deprecated StaticWaterManager
+		/*if (StaticWaterGenerator && bEnableStaticWater)
 		{
-			ChunkManager->SetStaticWaterManager(StaticWaterManager);
-		}
+			ChunkManager->SetStaticWaterGenerator(StaticWaterGenerator);
+		}*/
 
 		if (TargetVoxelWorld)
 		{
@@ -469,7 +386,7 @@ void AVoxelFluidActor::InitializeFluidSystem()
 				}
 
 				// Apply static water ONLY after verifying terrain is loaded
-				if (StaticWaterManager && bEnableStaticWater)
+				if (false) // Static water handled by AVoxelStaticWaterActor
 				{
 					// Longer delay and verify terrain before applying water
 					FTimerHandle WaterPlacementHandle;
@@ -500,10 +417,10 @@ void AVoxelFluidActor::InitializeFluidSystem()
 
 								// Now apply static water (it will also check bIsSolid)
 								FBox ChunkBounds = Chunk->GetWorldBounds();
-								if (StaticWaterManager->ChunkIntersectsStaticWater(ChunkBounds))
+								/*if (StaticWaterManager->ChunkIntersectsStaticWater(ChunkBounds))
 								{
 									StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk, ChunkManager);
-								}
+								}*/
 							}
 							else
 							{
@@ -528,7 +445,7 @@ void AVoxelFluidActor::InitializeFluidSystem()
 											}
 										}
 
-										StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(RetryChunk, ChunkManager);
+										// StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(RetryChunk, ChunkManager);
 									}
 								}, 0.5f, false);
 							}
@@ -596,13 +513,18 @@ void AVoxelFluidActor::AddFluidSource(const FVector& WorldPosition, float FlowRa
 	// Apply density multiplier to the flow rate
 	const float FinalFlowRate = ActualFlowRate * FluidDensityMultiplier;
 
+	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor::AddFluidSource at %s, flow rate: %.2f (final: %.2f)"), 
+		*WorldPosition.ToString(), ActualFlowRate, FinalFlowRate);
+
 	if (FluidSources.Contains(WorldPosition))
 	{
 		FluidSources[WorldPosition] = FinalFlowRate;
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Updated existing fluid source. Total sources: %d"), FluidSources.Num());
 	}
 	else
 	{
 		FluidSources.Add(WorldPosition, FinalFlowRate);
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Added new fluid source. Total sources: %d"), FluidSources.Num());
 	}
 }
 
@@ -617,19 +539,29 @@ void AVoxelFluidActor::AddFluidAtLocation(const FVector& WorldPosition, float Am
 	// Apply accumulation and density multiplier
 	const float AdjustedAmount = Amount * FluidDensityMultiplier * (1.0f + FluidAccumulation);
 
+	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor::AddFluidAtLocation at %s, amount: %.2f (adjusted: %.2f)"), 
+		*WorldPosition.ToString(), Amount, AdjustedAmount);
+
 	// Notify water activation manager about fluid being added
-	if (WaterActivationManager && AdjustedAmount > 0.0f)
+	// Water activation manager now handled by AVoxelStaticWaterActor
+	/*if (WaterActivationManager && AdjustedAmount > 0.0f)
 	{
 		WaterActivationManager->OnFluidAdded(WorldPosition, AdjustedAmount);
-	}
+	}*/
 
 	if (ChunkManager)
 	{
 		ChunkManager->AddFluidAtWorldPosition(WorldPosition, AdjustedAmount);
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Added fluid via ChunkManager"));
 	}
 	else if (VoxelIntegration)
 	{
 		VoxelIntegration->AddFluidAtWorldPosition(WorldPosition, AdjustedAmount);
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Added fluid via VoxelIntegration"));
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("VoxelFluidActor: No ChunkManager or VoxelIntegration available!"));
 	}
 }
 
@@ -752,7 +684,8 @@ void AVoxelFluidActor::UpdateDebugVisualization()
 	}
 
 	// Draw static water bounds if enabled
-	if (bShowStaticWaterBounds && StaticWaterManager && bEnableStaticWater)
+	// Static water bounds visualization moved to AVoxelStaticWaterActor
+	/*if (false)
 	{
 		if (UWorld* World = GetWorld())
 		{
@@ -785,7 +718,7 @@ void AVoxelFluidActor::UpdateDebugVisualization()
 				DrawDebugBox(World, PlaneCenter, PlaneExtent, DebugColor.WithAlpha(128), false, -1.0f, 0, 1.0f);
 			}
 		}
-	}
+	}*/
 }
 
 void AVoxelFluidActor::DrawDebugChunks()
@@ -823,8 +756,8 @@ FString AVoxelFluidActor::GetPerformanceStats() const
 		Stats += FString::Printf(TEXT("Sim Time: %.2f ms\n"), LastFrameSimulationTime);
 	}
 	
-	// Static Water Stats
-	if (StaticWaterRenderer)
+	// Static Water Stats removed
+	/*if (false) // StaticWaterRenderer removed
 	{
 		int32 StaticChunks = StaticWaterRenderer->GetActiveRenderChunkCount();
 		int32 VisibleChunks = StaticWaterRenderer->GetVisibleRenderChunkCount();
@@ -837,17 +770,17 @@ FString AVoxelFluidActor::GetPerformanceStats() const
 		Stats += FString::Printf(TEXT("Ring: %.1fm - %.1fm\n"), 
 			StaticWaterRenderer->RenderSettings.MinRenderDistance / 100.0f,
 			StaticWaterRenderer->RenderSettings.MaxRenderDistance / 100.0f);
-	}
+	}*/
 	
-	// Water Activation Stats
-	if (WaterActivationManager)
+	// Water Activation Stats removed
+	/*if (false) // WaterActivationManager removed
 	{
 		int32 ActiveRegions = WaterActivationManager->GetActiveRegionCount();
 		Stats += FString::Printf(TEXT("Active Water Regions: %d\n"), ActiveRegions);
-	}
+	}*/
 	
 	// Performance Comparison
-	if (ChunkManager && StaticWaterRenderer)
+	/*if (ChunkManager && false) // StaticWaterRenderer removed
 	{
 		int32 SimChunks = ChunkManager->GetActiveChunkCount();
 		int32 StaticChunks = StaticWaterRenderer->GetActiveRenderChunkCount();
@@ -864,7 +797,7 @@ FString AVoxelFluidActor::GetPerformanceStats() const
 		
 		// Static water is much cheaper
 		Stats += FString::Printf(TEXT("MS per Static Chunk: ~0.02 (estimated)\n"));
-	}
+	}*/
 	
 	// Add original chunk system stats if available
 	if (ChunkManager)
@@ -948,6 +881,23 @@ void AVoxelFluidActor::InitializeChunkSystem()
 	ChunkManager->bShowChunkStates = bShowChunkStates;
 	ChunkManager->DebugUpdateInterval = ChunkDebugUpdateInterval;
 
+	// Initialize static water components
+	if (StaticWaterRenderer && VoxelIntegration)
+	{
+		StaticWaterRenderer->SetVoxelIntegration(VoxelIntegration);
+	}
+
+	if (StaticWaterGenerator && VoxelIntegration)
+	{
+		StaticWaterGenerator->SetVoxelWorld(TargetVoxelWorld);
+	}
+
+	if (WaterActivationManager && ChunkManager)
+	{
+		WaterActivationManager->SetFluidChunkManager(ChunkManager);
+		WaterActivationManager->SetStaticWaterGenerator(StaticWaterGenerator);
+		WaterActivationManager->SetStaticWaterRenderer(StaticWaterRenderer);
+	}
 }
 
 void AVoxelFluidActor::UpdateChunkSystem(float DeltaTime)
@@ -1295,200 +1245,23 @@ void AVoxelFluidActor::TestPersistenceWithSourcePause()
 	bTestInProgress = false;
 }
 
-// Static Water Implementation
-void AVoxelFluidActor::CreateOcean(float WaterLevel, float Size)
-{
-	if (!StaticWaterManager)
-	{
-		return;
-	}
-
-	FBox OceanBounds(
-		FVector(-Size, -Size, WaterLevel - 10000.0f),
-		FVector(Size, Size, WaterLevel)
-	);
-	
-
-	StaticWaterManager->CreateOcean(WaterLevel, OceanBounds);
-
-	// Apply to all loaded chunks
-	if (bEnableStaticWater)
-	{
-		ApplyStaticWaterToAllChunks();
-
-		// Schedule a retry after a short delay to catch any chunks that had uninitialized terrain
-		FTimerHandle RetryTimerHandle;
-		GetWorld()->GetTimerManager().SetTimer(RetryTimerHandle, [this]()
-		{
-			RetryStaticWaterApplication();
-		}, 1.0f, false);
-	}
-
-}
-
-void AVoxelFluidActor::CreateLake(const FVector& Center, float Radius, float WaterLevel, float Depth)
-{
-	if (!StaticWaterManager)
-	{
-		return;
-	}
-
-	StaticWaterManager->CreateLake(Center, Radius, WaterLevel, Depth);
-
-	// Apply to all loaded chunks
-	if (bEnableStaticWater)
-	{
-		ApplyStaticWaterToAllChunks();
-	}
-
-}
-
-void AVoxelFluidActor::CreateRectangularLake(const FVector& Min, const FVector& Max, float WaterLevel)
-{
-	if (!StaticWaterManager)
-	{
-		return;
-	}
-
-	FBox LakeBounds(Min, FVector(Max.X, Max.Y, WaterLevel));
-	StaticWaterManager->CreateRectangularLake(LakeBounds, WaterLevel);
-
-	// Apply to all loaded chunks
-	if (bEnableStaticWater)
-	{
-		ApplyStaticWaterToAllChunks();
-	}
-
-}
-
-void AVoxelFluidActor::ClearStaticWater()
-{
-	if (!StaticWaterManager)
-	{
-		return;
-	}
-
-	StaticWaterManager->ClearAllStaticWaterRegions();
-
-	// Clear static water from all chunks
-	if (ChunkManager)
-	{
-		TArray<UFluidChunk*> AllChunks = ChunkManager->GetActiveChunks();
-		for (UFluidChunk* Chunk : AllChunks)
-		{
-			if (Chunk)
-			{
-				// Clear cells that were marked as static water sources
-				for (int32 i = 0; i < Chunk->Cells.Num(); i++)
-				{
-					if (Chunk->Cells[i].bSourceBlock)
-					{
-						Chunk->Cells[i].FluidLevel = 0.0f;
-						Chunk->Cells[i].bSourceBlock = false;
-						Chunk->Cells[i].bSettled = false;
-					}
-				}
-			}
-		}
-	}
-
-}
-
-void AVoxelFluidActor::ApplyStaticWaterToAllChunks()
-{
-	if (!StaticWaterManager || !ChunkManager || !bEnableStaticWater)
-	{
-		return;
-	}
-
-	TArray<UFluidChunk*> AllChunks = ChunkManager->GetActiveChunks();
-	int32 AppliedCount = 0;
-	int32 SkippedCount = 0;
-
-	for (UFluidChunk* Chunk : AllChunks)
-	{
-		if (Chunk)
-		{
-			FBox ChunkBounds = Chunk->GetWorldBounds();
-			if (StaticWaterManager->ChunkIntersectsStaticWater(ChunkBounds))
-			{
-				// Force terrain update first if VoxelIntegration is available
-				if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
-				{
-					VoxelIntegration->UpdateTerrainForChunkCoord(Chunk->ChunkCoord);
-				}
-
-				// Apply static water with terrain awareness
-				StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk, ChunkManager);
-				AppliedCount++;
-			}
-			else
-			{
-				SkippedCount++;
-			}
-		}
-	}
-}
-
-bool AVoxelFluidActor::IsPointInStaticWater(const FVector& WorldPosition) const
-{
-	if (!StaticWaterManager || !bEnableStaticWater)
-	{
-		return false;
-	}
-
-	return StaticWaterManager->IsPointInStaticWater(WorldPosition);
-}
-
-void AVoxelFluidActor::RetryStaticWaterApplication()
-{
-	if (!StaticWaterManager || !ChunkManager || !bEnableStaticWater)
-	{
-		return;
-	}
-
-	TArray<UFluidChunk*> AllChunks = ChunkManager->GetActiveChunks();
-	int32 RetriedCount = 0;
+// Static Water Implementation - Deprecated (moved to AVoxelStaticWaterActor)
 
 
-	for (UFluidChunk* Chunk : AllChunks)
-	{
-		if (Chunk)
-		{
-			FBox ChunkBounds = Chunk->GetWorldBounds();
-			if (StaticWaterManager->ChunkIntersectsStaticWater(ChunkBounds))
-			{
-				// Force terrain update first
-				if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
-				{
-					VoxelIntegration->UpdateTerrainForChunkCoord(Chunk->ChunkCoord);
-				}
 
-				// Clear any existing static water first
-				for (int32 i = 0; i < Chunk->Cells.Num(); i++)
-				{
-					if (Chunk->Cells[i].bSourceBlock)
-					{
-						Chunk->Cells[i].FluidLevel = 0.0f;
-						Chunk->Cells[i].bSourceBlock = false;
-						Chunk->Cells[i].bSettled = false;
-					}
-				}
 
-				// Apply static water with terrain awareness
-				StaticWaterManager->ApplyStaticWaterToChunkWithTerrain(Chunk, ChunkManager);
-				RetriedCount++;
-			}
-		}
-	}
 
-}
+// IsPointInStaticWater removed - use LinkedStaticWaterActor directly
 
+
+// DEPRECATED: Static water refill moved to AVoxelStaticWaterActor
+/*
 void AVoxelFluidActor::RefillStaticWaterInRadius(const FVector& Center, float Radius)
 {
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_DynamicRefill);
 
-	if (!StaticWaterManager || !ChunkManager || !bEnableStaticWater)
+	// StaticWaterManager removed - function disabled
+	if (!ChunkManager) // || !StaticWaterManager || !bEnableStaticWater)
 	{
 		return;
 	}
@@ -1560,7 +1333,10 @@ void AVoxelFluidActor::RefillStaticWaterInRadius(const FVector& Center, float Ra
 	}
 
 }
+*/
 
+// DEPRECATED: Dynamic to static conversion moved to AVoxelStaticWaterActor
+/*
 void AVoxelFluidActor::StartDynamicToStaticConversion(const FVector& Center, float Radius)
 {
 	// Schedule conversion after settling time
@@ -1571,10 +1347,14 @@ void AVoxelFluidActor::StartDynamicToStaticConversion(const FVector& Center, flo
 	}, DynamicToStaticSettleTime, false);
 
 }
+*/
 
+// DEPRECATED: Settled fluid conversion moved to AVoxelStaticWaterActor  
+/*
 void AVoxelFluidActor::ConvertSettledFluidToStatic(const FVector& Center, float Radius)
 {
-	if (!StaticWaterManager || !ChunkManager || !bEnableStaticWater)
+	// StaticWaterManager removed - function disabled
+	if (!ChunkManager) // || !StaticWaterManager || !bEnableStaticWater)
 	{
 		return;
 	}
@@ -1655,7 +1435,10 @@ void AVoxelFluidActor::ConvertSettledFluidToStatic(const FVector& Center, float 
 	}
 
 }
+*/
 
+// DEPRECATED: Terrain refresh testing moved to AVoxelStaticWaterActor
+/*
 void AVoxelFluidActor::TestTerrainRefreshAtLocation(const FVector& Location, float Radius)
 {
 
@@ -1696,11 +1479,12 @@ void AVoxelFluidActor::TestTerrainRefreshAtLocation(const FVector& Location, flo
 
 
 	// Now test the static water refill
-	RefillStaticWaterInRadius(Location, Radius);
+	// RefillStaticWaterInRadius(Location, Radius); // Removed - handled by static water actor
 }
+*/
 
-// New Static Water System Function Implementations
-
+// DEPRECATED: Static water regions moved to AVoxelStaticWaterActor
+/*
 void AVoxelFluidActor::AddStaticWaterRegion(const FVector& Center, float Radius, float WaterLevel)
 {
 	if (!StaticWaterGenerator)
@@ -1719,7 +1503,10 @@ void AVoxelFluidActor::AddStaticWaterRegion(const FVector& Center, float Radius,
 	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Added static water region at %s (radius: %.1f, level: %.1f)"), 
 		*Center.ToString(), Radius, WaterLevel);
 }
+*/
 
+// DEPRECATED: Static water region removal moved to AVoxelStaticWaterActor
+/*
 void AVoxelFluidActor::RemoveStaticWaterRegion(const FVector& Center, float Radius)
 {
 	if (!StaticWaterGenerator)
@@ -1731,53 +1518,12 @@ void AVoxelFluidActor::RemoveStaticWaterRegion(const FVector& Center, float Radi
 
 	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Cleared static water regions"));
 }
+*/
 
-void AVoxelFluidActor::OnTerrainEdited(const FVector& EditPosition, float EditRadius, float HeightChange)
-{
-	// CRITICAL: In edit-triggered mode, activate chunks FIRST before any other operations
-	if (ChunkManager && ChunkActivationMode != EChunkActivationMode::DistanceBased)
-	{
-		// Activate chunks in the edit area - this ensures chunks exist before we try to add water
-		ChunkManager->OnVoxelEditOccurred(EditPosition, EditRadius);
-		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Activated chunks for terrain edit at %s"), 
-			*EditPosition.ToString());
-	}
-	
-	// First, refresh the terrain data in the affected area
-	if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
-	{
-		VoxelIntegration->RefreshTerrainInRadius(EditPosition, EditRadius);
-	}
+// OnTerrainEdited function removed - not declared in header
+// This functionality should be handled through OnTerrainModified or through the linked static water actor
 
-	// Check if there's static water at this location
-	bool bHasWater = false;
-	float WaterLevel = 0.0f;
-	if (StaticWaterGenerator)
-	{
-		bHasWater = StaticWaterGenerator->HasStaticWaterAtLocation(EditPosition);
-		if (bHasWater)
-		{
-			WaterLevel = StaticWaterGenerator->GetWaterLevelAtLocation(EditPosition);
-		}
-		
-		// Notify static water generator about terrain changes
-		const FBox ChangedBounds = FBox::BuildAABB(EditPosition, FVector(EditRadius));
-		StaticWaterGenerator->OnTerrainChanged(ChangedBounds);
-	}
-
-	// If there's water, spawn MINIMAL fluid simulation only where edited
-	if (bHasWater && ChunkManager)
-	{
-		// Make sure simulation is running
-		if (!bIsSimulating)
-		{
-			StartSimulation();
-		}
-		
-		// High-resolution water spawning with smooth interpolation
-		const float LocalizedSpawnRadius = EditRadius * 2.0f; // Larger radius for better coverage
-		const float SpawnSpacing = bUseHighResolution ? 
-			(CellSize * FMath::Clamp(WaterSpawnDensity, 0.25f, 2.0f)) : CellSize;
+/* OnTerrainEdited function body commented out - not declared in header
 		const int32 SpawnGridSize = FMath::CeilToInt(LocalizedSpawnRadius / SpawnSpacing);
 		
 		// Pre-calculate terrain heights in parallel for performance
@@ -1941,17 +1687,13 @@ void AVoxelFluidActor::OnTerrainEdited(const FVector& EditPosition, float EditRa
 		UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Spawned %d localized fluid cells"), SpawnedCount);
 	}
 
-	// Trigger water activation manager if needed (for region tracking)
-	if (WaterActivationManager)
-	{
-		WaterActivationManager->OnTerrainEdited(EditPosition, EditRadius, HeightChange);
-	}
+	// Water activation now handled by AVoxelStaticWaterActor
 
-	// Force update the static water renderer to hide water in active simulation areas
-	if (StaticWaterRenderer)
+	// Static water rendering now handled by AVoxelStaticWaterActor
+	if (false) // StaticWaterRenderer removed
 	{
 		// Hide static water where dynamic simulation is active
-		StaticWaterRenderer->RebuildChunksInRadius(EditPosition, EditRadius * 2.0f);
+		// StaticWaterRenderer->RebuildChunksInRadius(EditPosition, EditRadius * 2.0f);
 		
 		// TODO: Implement exclusion zones in StaticWaterRenderer to prevent 
 		// static water from rendering where dynamic water exists
@@ -1980,9 +1722,12 @@ void AVoxelFluidActor::OnTerrainEdited(const FVector& EditPosition, float EditRa
 			}
 		}
 		*/
-	}
-}
+	// }
+// }
+// End of OnTerrainEdited function body - commented out */
 
+// OnVoxelTerrainModified removed - not declared in header
+/*
 void AVoxelFluidActor::OnVoxelTerrainModified(const FVector& ModifiedPosition, float ModifiedRadius)
 {
 	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: OnVoxelTerrainModified called at %s (radius: %.1f)"), 
@@ -1998,10 +1743,8 @@ void AVoxelFluidActor::OnVoxelTerrainModified(const FVector& ModifiedPosition, f
 			*ModifiedPosition.ToString());
 	}
 	
-	// Call OnTerrainEdited with a default height change value
-	// In practice, you might want to calculate the actual height change
-	const float EstimatedHeightChange = 100.0f; // Assume significant change
-	OnTerrainEdited(ModifiedPosition, ModifiedRadius, EstimatedHeightChange);
+	// OnTerrainEdited call removed - function not in header
+	// Terrain editing should be handled through linked static water actor if needed
 	
 	// Also notify the VoxelIntegration directly
 	if (VoxelIntegration)
@@ -2010,50 +1753,55 @@ void AVoxelFluidActor::OnVoxelTerrainModified(const FVector& ModifiedPosition, f
 		VoxelIntegration->OnVoxelTerrainModified(ModifiedBounds);
 	}
 	
-	// Force an immediate update of the static water renderer
-	if (StaticWaterRenderer)
-	{
-		StaticWaterRenderer->RebuildChunksInRadius(ModifiedPosition, ModifiedRadius);
-	}
+	// Static water renderer updates now handled by AVoxelStaticWaterActor
 }
+*/
 
+// IsRegionActiveForSimulation removed - not declared in header
+/*
 bool AVoxelFluidActor::IsRegionActiveForSimulation(const FVector& Position) const
 {
-	if (!WaterActivationManager)
-		return false;
-
-	return WaterActivationManager->IsRegionActive(Position);
+	// Water activation manager removed - delegate to linked static water actor
+	return false;
 }
+*/
 
+// ForceActivateWaterAtLocation removed - not declared in header
+/*
 void AVoxelFluidActor::ForceActivateWaterAtLocation(const FVector& Position, float Radius)
 {
-	if (!WaterActivationManager)
-		return;
+	// Water activation manager removed - delegate to linked static water actor
+	return;
 
-	const bool bSuccess = WaterActivationManager->ActivateWaterInRegion(Position, Radius);
+	const bool bSuccess = false; // WaterActivationManager removed
 	
 	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: %s water activation at %s (radius: %.1f)"), 
 		bSuccess ? TEXT("Successful") : TEXT("Failed"), *Position.ToString(), Radius);
 }
+*/
 
+// ForceDeactivateAllWaterRegions removed - not declared in header
+/*
 void AVoxelFluidActor::ForceDeactivateAllWaterRegions()
 {
-	if (!WaterActivationManager)
-		return;
-
-	WaterActivationManager->ForceDeactivateAllRegions();
+	// Water activation manager removed - delegate to linked static water actor
+	return;
 	
 	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Deactivated all water regions"));
 }
+*/
 
+// GetActiveWaterRegionCount removed - not declared in header
+/*
 int32 AVoxelFluidActor::GetActiveWaterRegionCount() const
 {
-	if (!WaterActivationManager)
-		return 0;
-
-	return WaterActivationManager->GetActiveRegionCount();
+	// Water activation manager removed - delegate to linked static water actor
+	return 0;
 }
+*/
 
+// DEPRECATED: Test water system moved to AVoxelStaticWaterActor
+/*
 void AVoxelFluidActor::SetupTestWaterSystem()
 {
 	if (!StaticWaterGenerator || !StaticWaterRenderer)
@@ -2125,7 +1873,10 @@ void AVoxelFluidActor::SetupTestWaterSystem()
 			*PlayerPos.ToString(), OceanLevel);
 	}
 }
+*/
 
+// DEPRECATED: Test ocean creation moved to AVoxelStaticWaterActor
+/*
 void AVoxelFluidActor::CreateTestOcean()
 {
 	if (!StaticWaterGenerator)
@@ -2168,11 +1919,15 @@ void AVoxelFluidActor::CreateTestOcean()
 	
 	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Created massive ocean centered at %s, water level: -100"), *PlayerPos.ToString());
 }
+*/
 
+// RecenterOceanOnPlayer removed - not declared in header
+/*
 void AVoxelFluidActor::RecenterOceanOnPlayer()
 {
-	CreateTestOcean(); // Just calls the same function which now centers on player
+	// CreateTestOcean(); // Removed - handled by static water actor
 }
+*/
 
 void AVoxelFluidActor::ManageSimulationWaterAroundPlayer(const FVector& PlayerPos)
 {
@@ -2355,7 +2110,8 @@ void AVoxelFluidActor::TestEditTriggeredActivation(const FVector& TestPosition, 
 	
 	// Simulate a terrain edit
 	UE_LOG(LogTemp, Warning, TEXT("Simulating terrain edit..."));
-	OnVoxelTerrainModified(TestPosition, TestRadius);
+	// OnVoxelTerrainModified removed - function not declared in header
+	// OnVoxelTerrainModified(TestPosition, TestRadius);
 	
 	// Force immediate update
 	ChunkManager->ForceUpdateChunkStates();
@@ -2379,6 +2135,8 @@ void AVoxelFluidActor::TestEditTriggeredActivation(const FVector& TestPosition, 
 	UE_LOG(LogTemp, Warning, TEXT("=== Test Complete ==="));
 }
 
+// SpawnSimulationWaterAroundPlayer removed - not declared in header
+/*
 void AVoxelFluidActor::SpawnSimulationWaterAroundPlayer()
 {
 	if (!ChunkManager)
@@ -2407,11 +2165,11 @@ void AVoxelFluidActor::SpawnSimulationWaterAroundPlayer()
 		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Started simulation for water spawning"));
 	}
 
-	// Get water level from static water generator
-	float WaterLevel = OceanWaterLevel;
-	if (StaticWaterGenerator)
+	// Get water level from linked static water actor
+	float WaterLevel = -100.0f; // Default ocean level
+	if (LinkedStaticWaterActor)
 	{
-		WaterLevel = StaticWaterGenerator->GetWaterLevelAtLocation(PlayerPos);
+		WaterLevel = LinkedStaticWaterActor->GetWaterLevelAtPosition(PlayerPos);
 	}
 
 	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Spawning simulation water around player at %s, water level: %.1f"), 
@@ -2419,7 +2177,7 @@ void AVoxelFluidActor::SpawnSimulationWaterAroundPlayer()
 
 	// Spawn water in a radius around the player (within MinRenderDistance of static water)
 	// We want to fill the "hole" in the donut where static water doesn't render
-	const float SpawnRadius = StaticWaterRenderer ? StaticWaterRenderer->RenderSettings.MinRenderDistance * 0.9f : 2000.0f;
+	const float SpawnRadius = 2000.0f; // Default spawn radius since StaticWaterRenderer is removed
 	const float SpawnSpacing = CellSize * 2.0f; // Space out the spawns
 	const int32 GridSize = FMath::CeilToInt(SpawnRadius * 2.0f / SpawnSpacing);
 	
@@ -2476,6 +2234,7 @@ void AVoxelFluidActor::SpawnSimulationWaterAroundPlayer()
 	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidActor: Spawned %d fluid cells around player (skipped %d above terrain)"), 
 		SpawnedCount, SkippedAboveTerrain);
 }
+*/
 
 void AVoxelFluidActor::DebugStuttering()
 {
@@ -2497,5 +2256,136 @@ void AVoxelFluidActor::DebugStuttering()
 	UE_LOG(LogTemp, Warning, TEXT("Activation Mode: %s"), 
 		Config.ActivationMode == EChunkActivationMode::EditTriggered ? TEXT("EditTriggered") : 
 		Config.ActivationMode == EChunkActivationMode::DistanceBased ? TEXT("DistanceBased") : TEXT("Hybrid"));
+}
+
+// ===== Communication with Static Water Actor =====
+
+void AVoxelFluidActor::OnStaticWaterActivationRequest(const FVector& Position, float Radius, float WaterLevel)
+{
+	if (!bAcceptStaticWaterActivation)
+	{
+		return;
+	}
+
+	// Activate chunks in the area if using edit-triggered mode
+	if (ChunkManager && ChunkActivationMode != EChunkActivationMode::DistanceBased)
+	{
+		ChunkManager->OnVoxelEditOccurred(Position, Radius);
+	}
+
+	// Calculate amount of water to spawn based on radius and conversion rate
+	float WaterAmount = (Radius * Radius / 10000.0f) * StaticToDynamicConversionRate;
+	
+	// Add dynamic water at the specified location
+	AddFluidAtLocation(FVector(Position.X, Position.Y, WaterLevel), WaterAmount);
+	
+	UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Activated dynamic water at %s (radius: %.1f, amount: %.1f)"),
+		*Position.ToString(), Radius, WaterAmount);
+}
+
+void AVoxelFluidActor::SetStaticWaterActor(AVoxelStaticWaterActor* InStaticWaterActor)
+{
+	LinkedStaticWaterActor = InStaticWaterActor;
+	
+	if (LinkedStaticWaterActor)
+	{
+		LinkedStaticWaterActor->SetFluidActor(this);
+		UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Linked with static water actor %s"), 
+			*LinkedStaticWaterActor->GetName());
+	}
+}
+
+bool AVoxelFluidActor::QueryStaticWaterLevel(const FVector& Position, float& OutWaterLevel) const
+{
+	if (StaticWaterGenerator && bEnableStaticWater)
+	{
+		if (StaticWaterGenerator->HasStaticWaterAtLocation(Position))
+		{
+			OutWaterLevel = StaticWaterGenerator->GetWaterLevelAtLocation(Position);
+			return true;
+		}
+	}
+	
+	// Fallback to linked static water actor if available
+	if (LinkedStaticWaterActor)
+	{
+		OutWaterLevel = LinkedStaticWaterActor->GetWaterLevelAtPosition(Position);
+		return LinkedStaticWaterActor->IsPointInStaticWater(Position);
+	}
+
+	return false;
+}
+
+bool AVoxelFluidActor::IsPointInStaticWater(const FVector& WorldPosition, float& OutWaterLevel) const
+{
+	return QueryStaticWaterLevel(WorldPosition, OutWaterLevel);
+}
+
+void AVoxelFluidActor::OnTerrainModified(const FVector& ModifiedPosition, float ModifiedRadius)
+{
+	// Refresh terrain data
+	if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
+	{
+		VoxelIntegration->RefreshTerrainInRadius(ModifiedPosition, ModifiedRadius);
+	}
+
+	// Call OnTerrainEdited to handle static water refresh
+	OnTerrainEdited(ModifiedPosition, ModifiedRadius);
+
+	// Notify static water actor if linked (for backward compatibility)
+	if (LinkedStaticWaterActor)
+	{
+		LinkedStaticWaterActor->OnVoxelTerrainModified(ModifiedPosition, ModifiedRadius);
+	}
+}
+
+void AVoxelFluidActor::OnTerrainEdited(const FVector& EditPosition, float EditRadius)
+{
+	// Refresh static water in the edited area
+	if (StaticWaterRenderer && bEnableStaticWater)
+	{
+		StaticWaterRenderer->RebuildChunksInRadius(EditPosition, EditRadius);
+	}
+	
+	// Activate water conversion if enabled
+	if (WaterActivationManager && bAcceptStaticWaterActivation)
+	{
+		WaterActivationManager->OnTerrainEdited(EditPosition, EditRadius, 0.0f);
+	}
+
+	// Activate chunks if needed
+	if (ChunkManager && ChunkActivationMode != EChunkActivationMode::DistanceBased)
+	{
+		ChunkManager->OnVoxelEditOccurred(EditPosition, EditRadius);
+	}
+}
+
+void AVoxelFluidActor::SpawnDynamicWaterAroundPlayer()
+{
+	if (APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0))
+	{
+		if (APawn* Pawn = PC->GetPawn())
+		{
+			FVector PlayerPos = Pawn->GetActorLocation();
+			
+			// Spawn a moderate amount of water near the player
+			FVector SpawnPos = PlayerPos + FVector(0, 0, 200.0f); // Spawn above player
+			AddFluidAtLocation(SpawnPos, 5.0f);
+			
+			UE_LOG(LogTemp, Log, TEXT("Spawned dynamic water at player location: %s"), *SpawnPos.ToString());
+		}
+	}
+}
+
+void AVoxelFluidActor::NotifyStaticWaterOfSettledFluid(const FVector& Center, float Radius)
+{
+	// If we have a linked static water actor, notify it that fluid has settled
+	// This could be used to convert settled dynamic water back to static water
+	if (LinkedStaticWaterActor && bAcceptStaticWaterActivation)
+	{
+		// For now, just log this event
+		UE_LOG(LogTemp, Log, TEXT("VoxelFluidActor: Fluid settled at %s (radius: %.1f) - could convert to static"),
+			*Center.ToString(), Radius);
+	}
 }
 

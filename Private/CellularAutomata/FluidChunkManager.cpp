@@ -457,25 +457,46 @@ bool UFluidChunkManager::GetCellFromWorldPosition(const FVector& WorldPos, FFlui
 
 void UFluidChunkManager::AddFluidAtWorldPosition(const FVector& WorldPos, float Amount)
 {
-	FFluidChunkCoord ChunkCoord;
-	int32 LocalX, LocalY, LocalZ;
-
-	if (GetCellFromWorldPosition(WorldPos, ChunkCoord, LocalX, LocalY, LocalZ))
+	UE_LOG(LogTemp, Warning, TEXT("FluidChunkManager::AddFluidAtWorldPosition called at %s with amount %f"), *WorldPos.ToString(), Amount);
+	
+	// Get chunk coordinate directly - don't require chunk to exist for coordinate calculation
+	FFluidChunkCoord ChunkCoord = GetChunkCoordFromWorldPosition(WorldPos);
+	UE_LOG(LogTemp, Warning, TEXT("FluidChunkManager: Position maps to chunk %s"), *ChunkCoord.ToString());
+	
+	// Create or get the chunk
+	UFluidChunk* Chunk = GetOrCreateChunk(ChunkCoord);
+	if (!Chunk)
 	{
-		UFluidChunk* Chunk = GetOrCreateChunk(ChunkCoord);
-		if (Chunk)
-		{
-			if (Chunk->State == EChunkState::Unloaded)
-			{
-				Chunk->LoadChunk();
-			}
-			Chunk->AddFluid(LocalX, LocalY, LocalZ, Amount);
+		UE_LOG(LogTemp, Warning, TEXT("FluidChunkManager: Failed to get or create chunk %s!"), *ChunkCoord.ToString());
+		return;
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("FluidChunkManager: Got chunk %s, current state: %d"), *ChunkCoord.ToString(), (int32)Chunk->State);
+	
+	// Ensure chunk is loaded
+	if (Chunk->State == EChunkState::Unloaded)
+	{
+		Chunk->LoadChunk();
+		UE_LOG(LogTemp, Warning, TEXT("FluidChunkManager: Loaded chunk %s"), *ChunkCoord.ToString());
+	}
+	
+	// Convert world position to local chunk coordinates
+	int32 LocalX, LocalY, LocalZ;
+	if (!Chunk->GetLocalFromWorldPosition(WorldPos, LocalX, LocalY, LocalZ))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FluidChunkManager: Failed to convert world position %s to local coordinates in chunk %s"), *WorldPos.ToString(), *ChunkCoord.ToString());
+		return;
+	}
+	
+	// Add the fluid
+	Chunk->AddFluid(LocalX, LocalY, LocalZ, Amount);
+	UE_LOG(LogTemp, Warning, TEXT("FluidChunkManager: Added %f fluid to chunk %s at local (%d,%d,%d)"), Amount, *ChunkCoord.ToString(), LocalX, LocalY, LocalZ);
 
-			if (Chunk->State == EChunkState::Inactive)
-			{
-				ActivateChunk(Chunk);
-			}
-		}
+	// Activate chunk if needed
+	if (Chunk->State == EChunkState::Inactive)
+	{
+		ActivateChunk(Chunk);
+		UE_LOG(LogTemp, Warning, TEXT("FluidChunkManager: Activated chunk %s"), *ChunkCoord.ToString());
 	}
 }
 

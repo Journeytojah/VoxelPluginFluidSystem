@@ -188,8 +188,7 @@ void UStaticWaterRenderer::SetViewerPosition(const FVector& Position)
 	ViewerPositions.Empty();
 	ViewerPositions.Add(Position);
 	
-	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: SetViewerPosition called with %s (auto-tracking disabled)"), *Position.ToString());
-	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: ViewerPositions now has %d entries"), ViewerPositions.Num());
+	// Viewer position updated silently
 }
 
 void UStaticWaterRenderer::AddViewer(const FVector& Position)
@@ -198,7 +197,7 @@ void UStaticWaterRenderer::AddViewer(const FVector& Position)
 	bAutoTrackPlayer = false;
 	
 	ViewerPositions.Add(Position);
-	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: AddViewer called with %s (auto-tracking disabled)"), *Position.ToString());
+	// Viewer added silently
 }
 
 void UStaticWaterRenderer::RemoveViewer(int32 ViewerIndex)
@@ -261,12 +260,12 @@ void UStaticWaterRenderer::RebuildChunksInRadius(const FVector& Center, float Ra
 
 void UStaticWaterRenderer::RegenerateAroundViewer()
 {
-	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: RegenerateAroundViewer called - updating active chunks"));
+	// Regenerating chunks around viewer
 	
 	// Just update which chunks should be active, don't force immediate update
 	UpdateActiveRenderChunks();
 	
-	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: RegenerateAroundViewer completed - %d active chunks"), GetActiveRenderChunkCount());
+	// Regeneration completed
 }
 
 void UStaticWaterRenderer::ResetRenderer()
@@ -498,7 +497,7 @@ void UStaticWaterRenderer::UpdateActiveRenderChunks()
 	{
 		if (bEnableLogging)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: UpdateActiveRenderChunks - No viewer positions"));
+			// No viewer positions available
 		}
 		return;
 	}
@@ -610,7 +609,7 @@ void UStaticWaterRenderer::LoadRenderChunk(const FIntVector& ChunkCoord)
 	NewChunk.MeshComponent = CreateMeshComponent(ChunkCoord);
 	NewChunk.bNeedsRebuild = true;
 	
-	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: 🌊 LOADED render chunk (%d, %d) at distance %.1fm, LOD%d"), 
+	UE_LOG(LogTemp, Verbose, TEXT("StaticWaterRenderer: 🌊 LOADED render chunk (%d, %d) at distance %.1fm, LOD%d"), 
 		ChunkCoord.X, ChunkCoord.Y, Distance, NewChunk.LODLevel);
 }
 
@@ -923,8 +922,31 @@ void UStaticWaterRenderer::GenerateAdaptiveWaterMesh(FStaticWaterRenderChunk& Ch
 			// Store the terrain height for later use when creating triangles
 			VertexTerrainHeights.Add(TerrainHeight);
 			
-			// Water surface is always at water level (flat ocean surface)
-			const float WaterSurfaceHeight = WaterLevel;
+			// Position water surface based on terrain - allow penetration near edges
+			float WaterSurfaceHeight;
+			const float EdgePenetration = RenderSettings.EdgePenetrationDepth; // Configurable penetration depth
+			const float TransitionZone = 50.0f; // 50cm transition zone
+			
+			if (TerrainHeight < WaterLevel - TransitionZone) // Terrain well below water level
+			{
+				// Place water surface at water level (proper water body)
+				WaterSurfaceHeight = WaterLevel;
+			}
+			else if (TerrainHeight < WaterLevel + EdgePenetration) // Near terrain edge (including slight penetration)
+			{
+				// Gradual transition - water can penetrate slightly into terrain
+				float PenetrationRatio = (TerrainHeight - (WaterLevel - TransitionZone)) / (TransitionZone + EdgePenetration);
+				PenetrationRatio = FMath::Clamp(PenetrationRatio, 0.0f, 1.0f);
+				
+				// At edges, allow water to go slightly below terrain surface
+				float EdgeWaterHeight = FMath::Lerp(WaterLevel, TerrainHeight - EdgePenetration, PenetrationRatio);
+				WaterSurfaceHeight = FMath::Max(EdgeWaterHeight, TerrainHeight - EdgePenetration);
+			}
+			else
+			{
+				// Terrain too high - no water here
+				WaterSurfaceHeight = TerrainHeight - 100.0f; // Well below terrain so triangles get culled
+			}
 			
 			TempVertices.Add(FVector(WorldX, WorldY, WaterSurfaceHeight));
 			TempUVs.Add(FVector2D((float)X / (VertsPerSide - 1), (float)Y / (VertsPerSide - 1)));
@@ -946,9 +968,18 @@ void UStaticWaterRenderer::GenerateAdaptiveWaterMesh(FStaticWaterRenderChunk& Ch
 			const float TerrainHeight3 = VertexTerrainHeights[NextRowIndex];
 			const float TerrainHeight4 = VertexTerrainHeights[NextRowIndex + 1];
 			
-			// Only create triangles if at least one corner is underwater
-			const bool bHasWater = (TerrainHeight1 < WaterLevel) || (TerrainHeight2 < WaterLevel) ||
-			                       (TerrainHeight3 < WaterLevel) || (TerrainHeight4 < WaterLevel);
+			// Create triangles where water should exist (including edge penetration)
+			int32 ValidWaterCorners = 0;
+			const float EdgePenetration = RenderSettings.EdgePenetrationDepth; // Configurable penetration
+			const float WaterThreshold = WaterLevel + EdgePenetration; // Allow slight penetration
+			
+			// Count corners where water is valid (including penetration zone)
+			if (TerrainHeight1 < WaterThreshold) ValidWaterCorners++;
+			if (TerrainHeight2 < WaterThreshold) ValidWaterCorners++;
+			if (TerrainHeight3 < WaterThreshold) ValidWaterCorners++;
+			if (TerrainHeight4 < WaterThreshold) ValidWaterCorners++;
+			
+			const bool bHasWater = ValidWaterCorners >= 2; // At least half the corners must be in valid water zone
 			
 			if (bHasWater)
 			{

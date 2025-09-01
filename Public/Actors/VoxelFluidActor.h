@@ -11,12 +11,11 @@ class UVoxelFluidIntegration;
 class UFluidVisualizationComponent;
 class UBoxComponent;
 class UBillboardComponent;
-class UStaticWaterManager;
+struct FChunkStreamingConfig;
+class AVoxelStaticWaterActor;
 class UStaticWaterGenerator;
 class UStaticWaterRenderer;
 class UWaterActivationManager;
-struct FChunkStreamingConfig;
-struct FStaticWaterRegion;
 
 UCLASS(Blueprintable, BlueprintType)
 class VOXELFLUIDSYSTEM_API AVoxelFluidActor : public AActor
@@ -93,10 +92,6 @@ public:
 	UFluidVisualizationComponent* VisualizationComponent;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
-	UStaticWaterManager* StaticWaterManager;
-
-	// New Static Water System Components
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UStaticWaterGenerator* StaticWaterGenerator;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
@@ -104,6 +99,10 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UWaterActivationManager* WaterActivationManager;
+
+	// Link to static water actor for water body management (deprecated)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water Integration")
+	AVoxelStaticWaterActor* LinkedStaticWaterActor;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Settings")
 	AActor* TargetVoxelWorld;
@@ -205,21 +204,19 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Properties", meta = (ClampMin = "0.0", ClampMax = "20.0"))
 	float FluidDensityMultiplier = 1.0f;
 
+	// Dynamic Water Activation
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dynamic Water")
+	bool bAcceptStaticWaterActivation = true;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dynamic Water")
+	float StaticToDynamicConversionRate = 10.0f;
+
 	// Static Water Properties
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water")
 	bool bEnableStaticWater = true;
-	
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water")
 	bool bShowStaticWaterBounds = false;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water", meta = (EditCondition = "bEnableStaticWater"))
-	bool bAutoCreateOcean = true;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water", meta = (EditCondition = "bAutoCreateOcean"))
-	float OceanWaterLevel = 0.0f;
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Static Water", meta = (EditCondition = "bAutoCreateOcean"))
-	float OceanSize = 100000.0f;
 
 	// Optimization settings removed
 	
@@ -288,71 +285,30 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bEnableDebugLogging = false;
 
-	// Static Water Body Functions
-	UFUNCTION(BlueprintCallable, Category = "Static Water", meta = (CallInEditor = "true"))
-	void CreateOcean(float WaterLevel = 0.0f, float Size = 100000.0f);
+	// Communication with Static Water Actor
+	UFUNCTION(BlueprintCallable, Category = "Water Integration")
+	void OnStaticWaterActivationRequest(const FVector& Position, float Radius, float WaterLevel);
 	
-	UFUNCTION(BlueprintCallable, Category = "Static Water", meta = (CallInEditor = "true"))
-	void CreateLake(const FVector& Center, float Radius, float WaterLevel, float Depth = 1000.0f);
+	UFUNCTION(BlueprintCallable, Category = "Water Integration")
+	void SetStaticWaterActor(AVoxelStaticWaterActor* InStaticWaterActor);
 	
-	UFUNCTION(BlueprintCallable, Category = "Static Water", meta = (CallInEditor = "true"))
-	void CreateRectangularLake(const FVector& Min, const FVector& Max, float WaterLevel);
+	UFUNCTION(BlueprintCallable, Category = "Water Integration")
+	bool QueryStaticWaterLevel(const FVector& Position, float& OutWaterLevel) const;
 	
-	UFUNCTION(BlueprintCallable, Category = "Static Water", meta = (CallInEditor = "true"))
-	void ClearStaticWater();
-	
+	// Terrain modification notifications
+	UFUNCTION(BlueprintCallable, Category = "Terrain Events")
+	void OnTerrainModified(const FVector& ModifiedPosition, float ModifiedRadius);
+
+	// Static Water Methods
 	UFUNCTION(BlueprintCallable, Category = "Static Water")
-	void ApplyStaticWaterToAllChunks();
-	
+	bool IsPointInStaticWater(const FVector& WorldPosition, float& OutWaterLevel) const;
+
 	UFUNCTION(BlueprintCallable, Category = "Static Water")
-	bool IsPointInStaticWater(const FVector& WorldPosition) const;
+	void OnTerrainEdited(const FVector& EditPosition, float EditRadius);
 	
-	UFUNCTION(BlueprintCallable, Category = "Static Water", meta = (CallInEditor = "true"))
-	void RetryStaticWaterApplication();
-	
-	UFUNCTION(BlueprintCallable, Category = "Static Water")
-	void RefillStaticWaterInRadius(const FVector& Center, float Radius);
-	
-	UFUNCTION(BlueprintCallable, Category = "Static Water Debug", meta = (CallInEditor = "true"))
-	void TestTerrainRefreshAtLocation(const FVector& Location, float Radius = 200.0f);
-
-	// New Static Water System Functions
-	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
-	void AddStaticWaterRegion(const FVector& Center, float Radius, float WaterLevel);
-
-	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
-	void RemoveStaticWaterRegion(const FVector& Center, float Radius);
-
-	UFUNCTION(BlueprintCallable, Category = "New Static Water")
-	void OnTerrainEdited(const FVector& EditPosition, float EditRadius, float HeightChange);
-
-	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
-	void OnVoxelTerrainModified(const FVector& ModifiedPosition, float ModifiedRadius);
-
-	UFUNCTION(BlueprintCallable, Category = "New Static Water")
-	bool IsRegionActiveForSimulation(const FVector& Position) const;
-
-	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
-	void ForceActivateWaterAtLocation(const FVector& Position, float Radius);
-
-	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
-	void ForceDeactivateAllWaterRegions();
-
-	UFUNCTION(BlueprintCallable, Category = "New Static Water")
-	int32 GetActiveWaterRegionCount() const;
-
-	// Quick Setup Functions
-	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
-	void SetupTestWaterSystem();
-
-	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
-	void CreateTestOcean();
-
-	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
-	void RecenterOceanOnPlayer();
-	
-	UFUNCTION(BlueprintCallable, Category = "New Static Water", meta = (CallInEditor = "true"))
-	void SpawnSimulationWaterAroundPlayer();
+	// Test spawning for dynamic water
+	UFUNCTION(BlueprintCallable, Category = "Dynamic Water", meta = (CallInEditor = "true"))
+	void SpawnDynamicWaterAroundPlayer();
 	
 	// Debug function to test edit-triggered activation
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid Debug", meta = (CallInEditor = "true"))
@@ -385,10 +341,6 @@ private:
 	// Simulation timing
 	float SimulationAccumulator = 0.0f;
 	
-	// Static water dynamic refill system
-	void StartDynamicToStaticConversion(const FVector& Center, float Radius);
-	void ConvertSettledFluidToStatic(const FVector& Center, float Radius);
-	
-	UPROPERTY(EditAnywhere, Category = "Static Water")
-	float DynamicToStaticSettleTime = 5.0f;
+	// Communication with static water system
+	void NotifyStaticWaterOfSettledFluid(const FVector& Center, float Radius);
 };

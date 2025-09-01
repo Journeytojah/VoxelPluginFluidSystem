@@ -102,6 +102,9 @@ struct VOXELFLUIDSYSTEM_API FStaticWaterRenderSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mesh Generation")
 	bool bSmoothNormals = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mesh Generation", meta = (ClampMin = "0", ClampMax = "50"))
+	float EdgePenetrationDepth = 15.0f; // How far water penetrates into terrain at edges (cm)
+
 	// Performance settings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "1", ClampMax = "32"))
 	int32 MaxChunksToUpdatePerFrame = 4;

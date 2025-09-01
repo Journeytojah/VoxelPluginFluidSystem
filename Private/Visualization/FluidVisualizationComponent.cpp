@@ -295,11 +295,21 @@ void UFluidVisualizationComponent::OnChunkUnloaded(const FFluidChunkCoord& Chunk
 void UFluidVisualizationComponent::GenerateChunkedVisualization()
 {
 	if (!ChunkManager)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FluidVisualizationComponent: ChunkManager is null!"));
 		return;
+	}
 	
 	// Skip visualization if chunk manager is processing chunk operations
 	if (ChunkManager->IsProcessingChunkOperations())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FluidVisualizationComponent: Skipping visualization - ChunkManager is processing operations"));
 		return;
+	}
+	
+	// Debug: Check if we have active chunks
+	const TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
+	UE_LOG(LogTemp, Warning, TEXT("FluidVisualizationComponent: Active chunks count: %d, RenderMode: %d"), ActiveChunks.Num(), (int32)RenderMode);
 	
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_Visualization);
 	

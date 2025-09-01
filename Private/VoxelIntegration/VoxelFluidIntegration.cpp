@@ -803,15 +803,13 @@ void UVoxelFluidIntegration::RefreshTerrainInRadius(const FVector& Center, float
 				Chunk->bDirty = true;
 				Chunk->MarkMeshDataDirty();
 				
-				// CRITICAL FIX: Trigger dynamic water refill for terrain changes
+				// Notify fluid actor about terrain changes
 				if (AActor* Owner = GetOwner())
 				{
 					if (AVoxelFluidActor* FluidActor = Cast<AVoxelFluidActor>(Owner))
 					{
-						if (FluidActor->StaticWaterManager)
-						{
-							FluidActor->StaticWaterManager->CreateDynamicFluidSourcesInRadius(Chunk, Center, Radius);
-						}
+						// FluidActor will handle any water spawning if needed
+						FluidActor->OnTerrainModified(Center, Radius);
 					}
 				}
 			}
