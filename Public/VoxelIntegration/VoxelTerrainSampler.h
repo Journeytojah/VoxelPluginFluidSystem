@@ -41,6 +41,15 @@ public:
 												float SampleResolution, const FVoxelStackLayer& VoxelLayer,
 												TArray<float>& OutHeights, TArray<FVector>& OutPositions, EVoxelSamplingMethod SamplingMethod = EVoxelSamplingMethod::VoxelQuery);
 
+	// Batch sampling for better performance
+	UFUNCTION(BlueprintCallable, Category = "Voxel Sampling")
+	static void SampleTerrainAtPositions(UObject* WorldContextObject, const TArray<FVector>& Positions, TArray<float>& OutHeights);
+
+	UFUNCTION(BlueprintCallable, Category = "Voxel Sampling")
+	static void SampleTerrainAtPositionsWithLayer(UObject* WorldContextObject, const TArray<FVector>& Positions, 
+													const FVoxelStackLayer& VoxelLayer, TArray<float>& OutHeights, 
+													EVoxelSamplingMethod SamplingMethod = EVoxelSamplingMethod::VoxelQuery);
+
 	UFUNCTION(BlueprintCallable, Category = "Voxel Sampling")
 	static bool IsPointInsideTerrain(UObject* WorldContextObject, const FVector& WorldLocation);
 

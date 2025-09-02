@@ -14,14 +14,10 @@ void UStaticWaterGenerator::BeginPlay()
 {
 	Super::BeginPlay();
 	
-	// Find VoxelFluidIntegration component on the same actor
-	if (AActor* Owner = GetOwner())
+	// VoxelIntegration should be set via SetVoxelIntegration() from the owning actor
+	if (!VoxelIntegration)
 	{
-		VoxelIntegration = Owner->FindComponentByClass<UVoxelFluidIntegration>();
-		if (!VoxelIntegration)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("StaticWaterGenerator: No VoxelFluidIntegration found on actor %s"), *Owner->GetName());
-		}
+		UE_LOG(LogTemp, Warning, TEXT("StaticWaterGenerator: No VoxelFluidIntegration set - should be configured by owning actor"));
 	}
 
 	if (GenerationSettings.bUseGPUGeneration)
@@ -74,6 +70,16 @@ void UStaticWaterGenerator::SetVoxelWorld(AActor* InVoxelWorld)
 		ActiveTileCoords.Empty();
 	}
 	
+	RegenerateAroundViewer();
+}
+
+void UStaticWaterGenerator::SetVoxelIntegration(UVoxelFluidIntegration* InVoxelIntegration)
+{
+	VoxelIntegration = InVoxelIntegration;
+	UE_LOG(LogTemp, Warning, TEXT("StaticWaterGenerator: VoxelIntegration set to %s"), 
+		VoxelIntegration ? TEXT("Valid") : TEXT("Null"));
+	
+	// Regenerate tiles when VoxelIntegration changes
 	RegenerateAroundViewer();
 }
 

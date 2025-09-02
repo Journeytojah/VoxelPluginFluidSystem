@@ -275,3 +275,49 @@ bool UVoxelTerrainSampler::PerformLineTrace(UWorld* World, const FVector& StartL
 		QueryParams
 	);
 }
+
+void UVoxelTerrainSampler::SampleTerrainAtPositions(UObject* WorldContextObject, const TArray<FVector>& Positions, TArray<float>& OutHeights)
+{
+	OutHeights.Empty();
+	OutHeights.Reserve(Positions.Num());
+	
+	if (!WorldContextObject || Positions.Num() == 0)
+		return;
+	
+	for (const FVector& Position : Positions)
+	{
+		float Height = SampleTerrainHeightAtLocation(WorldContextObject, Position);
+		OutHeights.Add(Height);
+	}
+}
+
+void UVoxelTerrainSampler::SampleTerrainAtPositionsWithLayer(UObject* WorldContextObject, const TArray<FVector>& Positions, 
+	const FVoxelStackLayer& VoxelLayer, TArray<float>& OutHeights, EVoxelSamplingMethod SamplingMethod)
+{
+	OutHeights.Empty();
+	OutHeights.Reserve(Positions.Num());
+	
+	if (!WorldContextObject || Positions.Num() == 0)
+		return;
+	
+	if (SamplingMethod == EVoxelSamplingMethod::VoxelQuery && Positions.Num() > 1)
+	{
+		TArray<FVoxelQueryResult> QueryResults;
+		TArray<UVoxelFloatMetadata*> EmptyMetadata;
+		
+		if (UVoxelLayersBlueprintLibrary::MultiQueryVoxelLayer(WorldContextObject, VoxelLayer, Positions, false, EmptyMetadata, 0, QueryResults))
+		{
+			for (const FVoxelQueryResult& Result : QueryResults)
+			{
+				OutHeights.Add(Result.Value);
+			}
+			return;
+		}
+	}
+	
+	for (const FVector& Position : Positions)
+	{
+		float Height = SampleTerrainHeightAtLocationWithLayer(WorldContextObject, Position, VoxelLayer, SamplingMethod);
+		OutHeights.Add(Height);
+	}
+}

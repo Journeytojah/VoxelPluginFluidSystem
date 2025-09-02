@@ -14,6 +14,7 @@
 #include "UObject/ConstructorHelpers.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "EngineUtils.h"
 
 AVoxelStaticWaterActor::AVoxelStaticWaterActor()
 {
@@ -58,18 +59,19 @@ AVoxelStaticWaterActor::AVoxelStaticWaterActor()
 	StaticWaterGenerator = CreateDefaultSubobject<UStaticWaterGenerator>(TEXT("StaticWaterGenerator"));
 	StaticWaterRenderer = CreateDefaultSubobject<UStaticWaterRenderer>(TEXT("StaticWaterRenderer"));
 	WaterActivationManager = CreateDefaultSubobject<UWaterActivationManager>(TEXT("WaterActivationManager"));
-	VoxelIntegration = CreateDefaultSubobject<UVoxelFluidIntegration>(TEXT("VoxelIntegration"));
+	// VoxelIntegration will be obtained from VoxelFluidActor to avoid duplicate terrain sampling
+	VoxelIntegration = nullptr;
 
 	// Default settings
 	bAutoInitialize = true;
 	bEnableDebugVisualization = false;
 	bAutoCreateOcean = true; // Enable by default for testing
 	OceanWaterLevel = -100.0f; // Shallower ocean for better terrain interaction
-	OceanSize = 50000.0f; // Smaller for better performance
+	OceanSize = 25000.0f; // Much smaller for faster startup
 	bFollowPlayer = true; // Enable by default
-	PlayerFollowDistance = 25000.0f; // Closer follow distance
+	PlayerFollowDistance = 15000.0f; // Closer follow distance for faster startup
 	
-	RenderDistance = 20000.0f;
+	RenderDistance = 10000.0f; // Reduced for faster startup
 	LODDistance1 = 5000.0f;
 	LODDistance2 = 10000.0f;
 	bUseMeshOptimization = true;
@@ -83,6 +85,11 @@ AVoxelStaticWaterActor::AVoxelStaticWaterActor()
 	MaxConcurrentRegions = 100;
 	UpdateFrequency = 0.1f;
 	bUseAsyncGeneration = true;
+	
+	// Terrain sampling defaults
+	bUseTerrainAdaptiveMesh = true;
+	SamplingMethod = EVoxelSamplingMethod::VoxelQuery;
+	bUseVoxelLayerSampling = true;
 }
 
 void AVoxelStaticWaterActor::BeginPlay()
@@ -101,6 +108,55 @@ void AVoxelStaticWaterActor::BeginPlay()
 	if (!WaterActivationManager)
 	{
 		WaterActivationManager = NewObject<UWaterActivationManager>(this, UWaterActivationManager::StaticClass(), TEXT("WaterActivationManager"));
+	}
+	
+	// Find shared VoxelIntegration from VoxelFluidActor to avoid duplicate terrain sampling
+	if (!VoxelIntegration)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			for (TActorIterator<AVoxelFluidActor> ActorItr(World); ActorItr; ++ActorItr)
+			{
+				AVoxelFluidActor* FluidActor = *ActorItr;
+				if (FluidActor && FluidActor->VoxelIntegration)
+				{
+					VoxelIntegration = FluidActor->VoxelIntegration;
+					UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Using shared VoxelIntegration from %s"), *FluidActor->GetName());
+					break;
+				}
+			}
+		}
+		
+		if (!VoxelIntegration)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: No VoxelFluidActor found, creating own VoxelIntegration"));
+			VoxelIntegration = NewObject<UVoxelFluidIntegration>(this, UVoxelFluidIntegration::StaticClass(), TEXT("VoxelIntegration"));
+		}
+		
+		// Configure VoxelIntegration with our terrain layer settings
+		if (VoxelIntegration && TargetVoxelWorld && bUseTerrainAdaptiveMesh)
+		{
+			// Initialize the VoxelIntegration if not already done
+			if (!VoxelIntegration->IsVoxelWorldValid())
+			{
+				VoxelIntegration->InitializeFluidSystem(TargetVoxelWorld);
+			}
+			
+			// Apply our terrain layer configuration
+			VoxelIntegration->bUseVoxelLayerSampling = bUseVoxelLayerSampling;
+			VoxelIntegration->SamplingMethod = SamplingMethod;
+			
+			// Set our terrain layer if specified
+			if (TerrainLayer.Layer != nullptr)
+			{
+				VoxelIntegration->TerrainLayer = TerrainLayer;
+				UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Applied custom terrain layer to shared VoxelIntegration"));
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: No terrain layer specified - using VoxelFluidActor's layer"));
+			}
+		}
 	}
 
 	if (bAutoInitialize)
@@ -212,6 +268,12 @@ void AVoxelStaticWaterActor::InitializeStaticWaterSystem()
 	if (StaticWaterGenerator && TargetVoxelWorld)
 	{
 		StaticWaterGenerator->SetVoxelWorld(TargetVoxelWorld);
+		
+		// Connect VoxelIntegration to StaticWaterGenerator
+		if (VoxelIntegration)
+		{
+			StaticWaterGenerator->SetVoxelIntegration(VoxelIntegration);
+		}
 	}
 
 	// Connect renderer to generator
@@ -222,7 +284,25 @@ void AVoxelStaticWaterActor::InitializeStaticWaterSystem()
 		// Connect voxel integration for terrain sampling
 		if (VoxelIntegration)
 		{
+			UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Connecting VoxelIntegration to StaticWaterRenderer - VoxelWorldValid: %s"), 
+				VoxelIntegration->IsVoxelWorldValid() ? TEXT("true") : TEXT("false"));
 			StaticWaterRenderer->SetVoxelIntegration(VoxelIntegration);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error, TEXT("VoxelStaticWaterActor: No VoxelIntegration available for StaticWaterRenderer!"));
+		}
+		
+		// Set water materials
+		if (WaterMaterial)
+		{
+			StaticWaterRenderer->WaterMaterial = WaterMaterial;
+			UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Set water material: %s"), *WaterMaterial->GetName());
+		}
+		if (WaterMaterialLOD1)
+		{
+			StaticWaterRenderer->WaterMaterialLOD1 = WaterMaterialLOD1;
+			UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Set water material LOD1: %s"), *WaterMaterialLOD1->GetName());
 		}
 	}
 

@@ -161,18 +161,38 @@ void UVoxelFluidIntegration::UpdateTerrainHeights()
 
 float UVoxelFluidIntegration::SampleVoxelHeight(float WorldX, float WorldY)
 {
-	FVector SampleLocation(WorldX, WorldY, 0);
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_TerrainSampling);
 	
+	// Check cache first if enabled
+	if (bEnableTerrainCaching)
+	{
+		float CachedHeight;
+		if (GetCachedHeight(WorldX, WorldY, CachedHeight))
+		{
+			return CachedHeight;
+		}
+	}
+	
+	FVector SampleLocation(WorldX, WorldY, 0);
 	UObject* WorldContext = IsVoxelWorldValid() ? static_cast<UObject*>(VoxelWorld) : static_cast<UObject*>(GetWorld());
 	
+	float Height = 0.0f;
 	if (bUseVoxelLayerSampling && TerrainLayer.Layer != nullptr)
 	{
-		return UVoxelTerrainSampler::SampleTerrainHeightAtLocationWithLayer(WorldContext, SampleLocation, TerrainLayer, SamplingMethod);
+		Height = UVoxelTerrainSampler::SampleTerrainHeightAtLocationWithLayer(WorldContext, SampleLocation, TerrainLayer, SamplingMethod);
 	}
 	else
 	{
-		return UVoxelTerrainSampler::SampleTerrainHeightAtLocation(WorldContext, SampleLocation);
+		Height = UVoxelTerrainSampler::SampleTerrainHeightAtLocation(WorldContext, SampleLocation);
 	}
+	
+	// Cache the result
+	if (bEnableTerrainCaching)
+	{
+		CacheHeight(WorldX, WorldY, Height);
+	}
+	
+	return Height;
 }
 
 void UVoxelFluidIntegration::UpdateTerrainHeightsWithVoxelLayer()
@@ -1379,6 +1399,211 @@ void UVoxelFluidIntegration::DrawDebugSolidCells()
 					{
 						FVector CellPos = FluidGrid->GetWorldPositionFromCell(x, y, z);
 						DrawDebugBox(GetWorld(), CellPos, FVector(CellWorldSize * 0.4f), FColor::Red, false, -1.0f, 0, 3.0f);
+					}
+				}
+			}
+		}
+	}
+}
+
+// =====================================================
+// TERRAIN CACHING IMPLEMENTATION
+// =====================================================
+
+FIntPoint UVoxelFluidIntegration::WorldPositionToCacheKey(float WorldX, float WorldY) const
+{
+	// Snap to cache grid for better cache hit rates
+	int32 GridX = FMath::FloorToInt(WorldX / TerrainCacheGridSize);
+	int32 GridY = FMath::FloorToInt(WorldY / TerrainCacheGridSize);
+	return FIntPoint(GridX, GridY);
+}
+
+bool UVoxelFluidIntegration::GetCachedHeight(float WorldX, float WorldY, float& OutHeight) const
+{
+	if (!bEnableTerrainCaching)
+		return false;
+		
+	FIntPoint CacheKey = WorldPositionToCacheKey(WorldX, WorldY);
+	const FTerrainCacheEntry* CacheEntry = TerrainHeightCache.Find(CacheKey);
+	
+	if (CacheEntry)
+	{
+		// Check if cache entry is still valid
+		float CurrentTime = FPlatformTime::Seconds();
+		if (CurrentTime - CacheEntry->CacheTime <= TerrainCacheLifetime)
+		{
+			OutHeight = CacheEntry->Height;
+			return true;
+		}
+	}
+	
+	return false;
+}
+
+void UVoxelFluidIntegration::CacheHeight(float WorldX, float WorldY, float Height)
+{
+	if (!bEnableTerrainCaching)
+		return;
+		
+	FIntPoint CacheKey = WorldPositionToCacheKey(WorldX, WorldY);
+	FVector2D Position(WorldX, WorldY);
+	TerrainHeightCache.Add(CacheKey, FTerrainCacheEntry(Position, Height));
+	
+	// Periodic cleanup to prevent memory bloat
+	float CurrentTime = FPlatformTime::Seconds();
+	if (CurrentTime - LastCacheCleanupTime > 60.0f) // Cleanup every minute
+	{
+		CleanupTerrainCache();
+		LastCacheCleanupTime = CurrentTime;
+	}
+}
+
+void UVoxelFluidIntegration::CleanupTerrainCache()
+{
+	if (!bEnableTerrainCaching)
+		return;
+		
+	float CurrentTime = FPlatformTime::Seconds();
+	
+	// Remove expired entries
+	for (auto It = TerrainHeightCache.CreateIterator(); It; ++It)
+	{
+		if (CurrentTime - It.Value().CacheTime > TerrainCacheLifetime)
+		{
+			It.RemoveCurrent();
+		}
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("VoxelFluidIntegration: Cleaned up terrain cache, %d entries remaining"), TerrainHeightCache.Num());
+}
+
+// =====================================================
+// BATCH SAMPLING IMPLEMENTATION  
+// =====================================================
+
+TArray<float> UVoxelFluidIntegration::SampleVoxelHeightsBatch(const TArray<FVector>& Positions)
+{
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_TerrainSampling);
+	
+	TArray<float> Heights;
+	Heights.Reserve(Positions.Num());
+	
+	if (Positions.Num() == 0)
+		return Heights;
+	
+	UObject* WorldContext = IsVoxelWorldValid() ? static_cast<UObject*>(VoxelWorld) : static_cast<UObject*>(GetWorld());
+	
+	if (bUseVoxelLayerSampling && TerrainLayer.Layer != nullptr)
+	{
+		UVoxelTerrainSampler::SampleTerrainAtPositionsWithLayer(WorldContext, Positions, TerrainLayer, Heights, SamplingMethod);
+	}
+	else
+	{
+		UVoxelTerrainSampler::SampleTerrainAtPositions(WorldContext, Positions, Heights);
+	}
+	
+	// Cache all the results if caching is enabled
+	if (bEnableTerrainCaching)
+	{
+		for (int32 i = 0; i < Positions.Num() && i < Heights.Num(); ++i)
+		{
+			CacheHeight(Positions[i].X, Positions[i].Y, Heights[i]);
+		}
+	}
+	
+	return Heights;
+}
+
+void UVoxelFluidIntegration::SampleChunkTerrainBatch(const FFluidChunkCoord& ChunkCoord)
+{
+	if (!ChunkManager)
+		return;
+		
+	// Calculate chunk boundaries using chunk coordinate and manager settings
+	const float ChunkWorldSize = ChunkManager->ChunkSize * ChunkManager->CellSize;
+	FVector ChunkMin = ChunkManager->WorldOrigin + FVector(
+		ChunkCoord.X * ChunkWorldSize,
+		ChunkCoord.Y * ChunkWorldSize,
+		ChunkCoord.Z * ChunkWorldSize
+	);
+	FVector ChunkMax = ChunkMin + FVector(ChunkWorldSize, ChunkWorldSize, ChunkWorldSize);
+	
+	// Calculate sample resolution based on chunk size
+	const int32 SamplesPerDimension = FMath::CeilToInt(ChunkWorldSize / CellWorldSize);
+	const float SampleSpacing = ChunkWorldSize / SamplesPerDimension;
+	
+	// Generate sample positions
+	TArray<FVector> SamplePositions;
+	SamplePositions.Reserve(SamplesPerDimension * SamplesPerDimension);
+	
+	for (int32 X = 0; X < SamplesPerDimension; ++X)
+	{
+		for (int32 Y = 0; Y < SamplesPerDimension; ++Y)
+		{
+			FVector SamplePos = ChunkMin + FVector(
+				(X + 0.5f) * SampleSpacing,
+				(Y + 0.5f) * SampleSpacing,
+				(ChunkMin.Z + ChunkMax.Z) * 0.5f
+			);
+			SamplePositions.Add(SamplePos);
+		}
+	}
+	
+	// Perform batch sampling
+	TArray<float> Heights = SampleVoxelHeightsBatch(SamplePositions);
+	
+	// Apply heights to chunk terrain using bilinear interpolation
+	UFluidChunk* Chunk = ChunkManager->GetChunk(ChunkCoord);
+	if (Chunk && Heights.Num() == SamplePositions.Num())
+	{
+		const int32 ChunkCellCount = ChunkManager->ChunkSize;
+		const float ChunkCellSize = ChunkManager->CellSize;
+		
+		for (int32 LocalX = 0; LocalX < ChunkCellCount; ++LocalX)
+		{
+			for (int32 LocalY = 0; LocalY < ChunkCellCount; ++LocalY)
+			{
+				// Calculate world position for this cell
+				FVector CellWorldPos = Chunk->GetWorldPositionFromLocal(LocalX, LocalY, 0);
+				
+				// Find interpolation weights in sample grid
+				float SampleX = (CellWorldPos.X - ChunkMin.X) / SampleSpacing - 0.5f;
+				float SampleY = (CellWorldPos.Y - ChunkMin.Y) / SampleSpacing - 0.5f;
+				
+				int32 X0 = FMath::Clamp(FMath::FloorToInt(SampleX), 0, SamplesPerDimension - 1);
+				int32 Y0 = FMath::Clamp(FMath::FloorToInt(SampleY), 0, SamplesPerDimension - 1);
+				int32 X1 = FMath::Clamp(X0 + 1, 0, SamplesPerDimension - 1);
+				int32 Y1 = FMath::Clamp(Y0 + 1, 0, SamplesPerDimension - 1);
+				
+				float FracX = SampleX - X0;
+				float FracY = SampleY - Y0;
+				
+				// Bilinear interpolation
+				int32 Idx00 = Y0 * SamplesPerDimension + X0;
+				int32 Idx10 = Y0 * SamplesPerDimension + X1;
+				int32 Idx01 = Y1 * SamplesPerDimension + X0;
+				int32 Idx11 = Y1 * SamplesPerDimension + X1;
+				
+				float H00 = (Idx00 < Heights.Num()) ? Heights[Idx00] : 0.0f;
+				float H10 = (Idx10 < Heights.Num()) ? Heights[Idx10] : 0.0f;
+				float H01 = (Idx01 < Heights.Num()) ? Heights[Idx01] : 0.0f;
+				float H11 = (Idx11 < Heights.Num()) ? Heights[Idx11] : 0.0f;
+				
+				float InterpolatedHeight = 
+					H00 * (1.0f - FracX) * (1.0f - FracY) +
+					H10 * FracX * (1.0f - FracY) +
+					H01 * (1.0f - FracX) * FracY +
+					H11 * FracX * FracY;
+				
+				// Update terrain for all Z levels in this column
+				for (int32 LocalZ = 0; LocalZ < ChunkCellCount; ++LocalZ)
+				{
+					FVector CellCenter = Chunk->GetWorldPositionFromLocal(LocalX, LocalY, LocalZ);
+					bool bIsSolid = (CellCenter.Z <= InterpolatedHeight);
+					
+					if (Chunk->IsCellSolid(LocalX, LocalY, LocalZ) != bIsSolid)
+					{
+						Chunk->SetCellSolid(LocalX, LocalY, LocalZ, bIsSolid);
 					}
 				}
 			}

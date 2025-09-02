@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "VoxelStackLayer.h"
+#include "VoxelIntegration/VoxelTerrainSampler.h"
 #include "VoxelStaticWaterActor.generated.h"
 
 class UStaticWaterGenerator;
@@ -214,6 +216,26 @@ public:
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
 	bool bUseAsyncGeneration = true;
+
+	// Terrain Sampling Settings
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain")
+	bool bUseTerrainAdaptiveMesh = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain", meta = (EditCondition = "bUseTerrainAdaptiveMesh"))
+	FVoxelStackLayer TerrainLayer;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain", meta = (EditCondition = "bUseTerrainAdaptiveMesh"))
+	EVoxelSamplingMethod SamplingMethod = EVoxelSamplingMethod::VoxelQuery;
+	
+	// Material Settings
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Materials")
+	UMaterialInterface* WaterMaterial = nullptr;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Materials", meta = (DisplayName = "Water Material LOD1"))
+	UMaterialInterface* WaterMaterialLOD1 = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain", meta = (EditCondition = "bUseTerrainAdaptiveMesh"))
+	bool bUseVoxelLayerSampling = true;
 
 	// Bounds Settings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bounds", meta = (CallInEditor = "true"))

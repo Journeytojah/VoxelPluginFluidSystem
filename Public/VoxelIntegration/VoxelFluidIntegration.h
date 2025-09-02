@@ -54,6 +54,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
 	float SampleVoxelHeight(float WorldX, float WorldY);
 
+	// Batch sampling for performance
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
+	TArray<float> SampleVoxelHeightsBatch(const TArray<FVector>& Positions);
+
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
+	void SampleChunkTerrainBatch(const struct FFluidChunkCoord& ChunkCoord);
+
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
 	void UpdateTerrainHeightsWithVoxelLayer();
 
@@ -98,6 +105,22 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Fluid")
 	UFluidChunkManager* ChunkManager;
+
+	// Performance settings
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
+	bool bUseAsyncTerrainSampling = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "1", ClampMax = "1000"))
+	int32 MaxTerrainSamplesPerFrame = 100;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "1", ClampMax = "32"))
+	int32 TerrainSamplingThreads = 4;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
+	bool bEnableTerrainCaching = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "10", ClampMax = "1000"))
+	float TerrainCacheGridSize = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fluid Settings")
 	int32 GridResolutionX = 128;
@@ -195,4 +218,38 @@ private:
 	int32 UpdateGridCellsInRadius(const FVector& Center, float Radius);
 	int32 UpdateChunkCellsInRadius(class UFluidChunk* Chunk, const FVector& Center, float Radius);
 	void WakeFluidInRadius(const FVector& Center, float Radius);
+
+	// Terrain caching for performance
+	struct FTerrainCacheEntry
+	{
+		FVector2D Position;
+		float Height;
+		float CacheTime;
+		
+		FTerrainCacheEntry() : Position(FVector2D::ZeroVector), Height(0.0f), CacheTime(0.0f) {}
+		FTerrainCacheEntry(const FVector2D& InPosition, float InHeight) 
+			: Position(InPosition), Height(InHeight), CacheTime(FPlatformTime::Seconds()) {}
+	};
+	
+	TMap<FIntPoint, FTerrainCacheEntry> TerrainHeightCache;
+	float TerrainCacheLifetime = 30.0f; // Cache for 30 seconds
+	float LastCacheCleanupTime = 0.0f;
+	
+	// Batch sampling queues
+	TQueue<FFluidChunkCoord> PendingChunkSampling;
+	TArray<FVector> BatchSamplePositions;
+	TArray<FFluidChunkCoord> BatchChunkCoords;
+	int32 CurrentBatchSize = 0;
+	
+	// Async processing
+	bool bIsProcessingBatch = false;
+	FCriticalSection BatchSamplingMutex;
+	
+	// Helper functions
+	FIntPoint WorldPositionToCacheKey(float WorldX, float WorldY) const;
+	void CleanupTerrainCache();
+	bool GetCachedHeight(float WorldX, float WorldY, float& OutHeight) const;
+	void CacheHeight(float WorldX, float WorldY, float Height);
+	void ProcessBatchSampling();
+	void OnBatchSamplingComplete(const TArray<float>& Heights);
 };

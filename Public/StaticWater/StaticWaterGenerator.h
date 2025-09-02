@@ -150,6 +150,9 @@ public:
 	void SetVoxelWorld(AActor* InVoxelWorld);
 
 	UFUNCTION(BlueprintCallable, Category = "Static Water Generation")
+	void SetVoxelIntegration(class UVoxelFluidIntegration* InVoxelIntegration);
+
+	UFUNCTION(BlueprintCallable, Category = "Static Water Generation")
 	void AddWaterRegion(const FStaticWaterRegionDef& Region);
 
 	UFUNCTION(BlueprintCallable, Category = "Static Water Generation")

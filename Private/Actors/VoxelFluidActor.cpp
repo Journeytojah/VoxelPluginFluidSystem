@@ -67,7 +67,9 @@ AVoxelFluidActor::AVoxelFluidActor()
 	VisualizationComponent->SetupAttachment(RootComponent);
 
 	StaticWaterGenerator = CreateDefaultSubobject<UStaticWaterGenerator>(TEXT("StaticWaterGenerator"));
-	StaticWaterRenderer = CreateDefaultSubobject<UStaticWaterRenderer>(TEXT("StaticWaterRenderer"));
+	// Disabled - VoxelStaticWaterActor handles static water rendering now
+	// StaticWaterRenderer = CreateDefaultSubobject<UStaticWaterRenderer>(TEXT("StaticWaterRenderer"));
+	StaticWaterRenderer = nullptr;
 	WaterActivationManager = CreateDefaultSubobject<UWaterActivationManager>(TEXT("WaterActivationManager"));
 
 	// Default performance-friendly settings
@@ -107,6 +109,11 @@ AVoxelFluidActor::AVoxelFluidActor()
 
 void AVoxelFluidActor::BeginPlay()
 {
+	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_BeginPlay);
+	
+	UE_LOG(LogTemp, Warning, TEXT("[PROFILING] VoxelFluidActor BeginPlay started"));
+	double StartTime = FPlatformTime::Seconds();
+	
 	Super::BeginPlay();
 
 	// Link with static water actor if one exists in the scene
@@ -126,12 +133,31 @@ void AVoxelFluidActor::BeginPlay()
 		}
 	}
 
-	InitializeFluidSystem();
+	{
+		SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_SystemInit);
+		double InitStartTime = FPlatformTime::Seconds();
+		UE_LOG(LogTemp, Warning, TEXT("[PROFILING] InitializeFluidSystem started"));
+		
+		InitializeFluidSystem();
+		
+		double SystemInitTime = (FPlatformTime::Seconds() - InitStartTime) * 1000.0;
+		UE_LOG(LogTemp, Warning, TEXT("[PROFILING] InitializeFluidSystem completed in %.2f ms"), SystemInitTime);
+	}
 
 	if (bAutoStart)
 	{
+		SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_AutoStart);
+		double AutoStartTime = FPlatformTime::Seconds();
+		UE_LOG(LogTemp, Warning, TEXT("[PROFILING] StartSimulation started"));
+		
 		StartSimulation();
+		
+		double SimTime = (FPlatformTime::Seconds() - AutoStartTime) * 1000.0;
+		UE_LOG(LogTemp, Warning, TEXT("[PROFILING] StartSimulation completed in %.2f ms"), SimTime);
 	}
+	
+	double TotalTime = (FPlatformTime::Seconds() - StartTime) * 1000.0;
+	UE_LOG(LogTemp, Warning, TEXT("[PROFILING] VoxelFluidActor BeginPlay completed in %.2f ms"), TotalTime);
 
 	// Force load chunks in distance-based mode
 	if (ChunkManager && ChunkActivationMode == EChunkActivationMode::DistanceBased)
@@ -139,6 +165,8 @@ void AVoxelFluidActor::BeginPlay()
 		FTimerHandle TimerHandle;
 		GetWorld()->GetTimerManager().SetTimer(TimerHandle, [this]()
 		{
+			SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_FirstChunkLoad);
+			
 			TArray<FVector> ViewerPositions = GetViewerPositions();
 			// Force an update to load chunks
 			ChunkManager->UpdateChunks(0.1f, ViewerPositions);
@@ -310,7 +338,10 @@ void AVoxelFluidActor::OnConstruction(const FTransform& Transform)
 
 void AVoxelFluidActor::InitializeFluidSystem()
 {
-	InitializeChunkSystem();
+	{
+		SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_ChunkSystemInit);
+		InitializeChunkSystem();
+	}
 
 	// Try to auto-link with static water actor if not already linked
 	if (!LinkedStaticWaterActor)
@@ -336,6 +367,8 @@ void AVoxelFluidActor::InitializeFluidSystem()
 
 	if (VoxelIntegration && ChunkManager)
 	{
+		SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_VoxelIntegrationInit);
+		
 		VoxelIntegration->SetChunkManager(ChunkManager);
 		VoxelIntegration->CellWorldSize = CellSize;
 
@@ -470,6 +503,7 @@ void AVoxelFluidActor::InitializeFluidSystem()
 
 	if (VisualizationComponent && ChunkManager)
 	{
+		SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_VisualizationInit);
 		VisualizationComponent->SetChunkManager(ChunkManager);
 	}
 
@@ -843,11 +877,20 @@ float AVoxelFluidActor::GetTotalFluidVolume() const
 
 void AVoxelFluidActor::InitializeChunkSystem()
 {
+	UE_LOG(LogTemp, Warning, TEXT("[PROFILING] InitializeChunkSystem - Creating ChunkManager"));
+	double StepStartTime = FPlatformTime::Seconds();
+	
 	if (!ChunkManager)
 	{
 		ChunkManager = NewObject<UFluidChunkManager>(this, UFluidChunkManager::StaticClass());
 	}
+	
+	double ChunkCreationTime = (FPlatformTime::Seconds() - StepStartTime) * 1000.0;
+	UE_LOG(LogTemp, Warning, TEXT("[PROFILING] ChunkManager creation: %.2f ms"), ChunkCreationTime);
 
+	UE_LOG(LogTemp, Warning, TEXT("[PROFILING] InitializeChunkSystem - Initializing ChunkManager"));
+	StepStartTime = FPlatformTime::Seconds();
+	
 	const FVector ActorLocation = GetActorLocation();
 	SimulationOrigin = ActorLocation - SimulationBoundsExtent + SimulationBoundsOffset;
 	ActiveBoundsExtent = SimulationBoundsExtent;
@@ -855,6 +898,9 @@ void AVoxelFluidActor::InitializeChunkSystem()
 	const FVector WorldSize = ActiveBoundsExtent * 2.0f;
 
 	ChunkManager->Initialize(ChunkSize, CellSize, SimulationOrigin, WorldSize);
+	
+	double ChunkInitTime = (FPlatformTime::Seconds() - StepStartTime) * 1000.0;
+	UE_LOG(LogTemp, Warning, TEXT("[PROFILING] ChunkManager Initialize: %.2f ms"), ChunkInitTime);
 
 	FChunkStreamingConfig Config;
 	Config.ActivationMode = ChunkActivationMode;
@@ -868,10 +914,16 @@ void AVoxelFluidActor::InitializeChunkSystem()
 	Config.LOD1Distance = LOD1Distance;
 	Config.LOD2Distance = LOD2Distance;
 
+	UE_LOG(LogTemp, Warning, TEXT("[PROFILING] InitializeChunkSystem - Setting streaming config"));
+	StepStartTime = FPlatformTime::Seconds();
+	
 	ChunkManager->SetStreamingConfig(Config);
 	ChunkManager->Viscosity = FluidViscosity;
 	ChunkManager->Gravity = GravityStrength;
 	ChunkManager->EvaporationRate = FluidEvaporationRate;
+	
+	double StreamingConfigTime = (FPlatformTime::Seconds() - StepStartTime) * 1000.0;
+	UE_LOG(LogTemp, Warning, TEXT("[PROFILING] Streaming config setup: %.2f ms"), StreamingConfigTime);
 
 	// Optimization settings removed - using default behavior
 
@@ -882,21 +934,25 @@ void AVoxelFluidActor::InitializeChunkSystem()
 	ChunkManager->DebugUpdateInterval = ChunkDebugUpdateInterval;
 
 	// Initialize static water components
-	if (StaticWaterRenderer && VoxelIntegration)
 	{
-		StaticWaterRenderer->SetVoxelIntegration(VoxelIntegration);
-	}
+		SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_StaticWaterInit);
+		
+		if (StaticWaterRenderer && VoxelIntegration)
+		{
+			StaticWaterRenderer->SetVoxelIntegration(VoxelIntegration);
+		}
 
-	if (StaticWaterGenerator && VoxelIntegration)
-	{
-		StaticWaterGenerator->SetVoxelWorld(TargetVoxelWorld);
-	}
+		if (StaticWaterGenerator && VoxelIntegration)
+		{
+			StaticWaterGenerator->SetVoxelWorld(TargetVoxelWorld);
+		}
 
-	if (WaterActivationManager && ChunkManager)
-	{
-		WaterActivationManager->SetFluidChunkManager(ChunkManager);
-		WaterActivationManager->SetStaticWaterGenerator(StaticWaterGenerator);
-		WaterActivationManager->SetStaticWaterRenderer(StaticWaterRenderer);
+		if (WaterActivationManager && ChunkManager)
+		{
+			WaterActivationManager->SetFluidChunkManager(ChunkManager);
+			WaterActivationManager->SetStaticWaterGenerator(StaticWaterGenerator);
+			WaterActivationManager->SetStaticWaterRenderer(StaticWaterRenderer);
+		}
 	}
 }
 

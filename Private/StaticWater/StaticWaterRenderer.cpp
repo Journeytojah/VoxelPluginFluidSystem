@@ -2,11 +2,13 @@
 #include "StaticWater/StaticWaterGenerator.h"
 #include "VoxelIntegration/VoxelFluidIntegration.h"
 #include "Actors/VoxelFluidActor.h"
+#include "Actors/VoxelStaticWaterActor.h"
 #include "ProceduralMeshComponent.h"
 #include "Engine/World.h"
 #include "Engine/Engine.h"
 #include "DrawDebugHelpers.h"
 #include "Materials/MaterialInterface.h"
+#include "Templates/UnrealTemplate.h"
 
 bool FStaticWaterRenderChunk::IsValid() const 
 { 
@@ -36,6 +38,18 @@ void UStaticWaterRenderer::BeginPlay()
 		{
 			UE_LOG(LogTemp, Log, TEXT("StaticWaterRenderer: Found StaticWaterGenerator on actor %s"), *Owner->GetName());
 		}
+	}
+
+	// Initialize startup optimization
+	StartupTime = 0.0f;
+	OriginalMaxRenderDistance = RenderSettings.MaxRenderDistance;
+	
+	// Start with much smaller render distance for faster startup
+	if (RenderSettings.bUseProgressiveLoading)
+	{
+		// Use chunk size * 2 as minimum to ensure we get at least some chunks
+		const float MinStartDistance = RenderSettings.RenderChunkSize * 2.0f; // ~25600 for our 12800 chunk size
+		RenderSettings.MaxRenderDistance = FMath::Min(MinStartDistance, OriginalMaxRenderDistance * 0.25f);
 	}
 
 	bIsInitialized = true;
@@ -124,6 +138,23 @@ void UStaticWaterRenderer::TickComponent(float DeltaTime, ELevelTick TickType, F
 						*NewPlayerPos.ToString());
 				}
 			}
+		}
+	}
+
+	// Progressive render distance increase for faster startup
+	if (RenderSettings.bUseProgressiveLoading && StartupTime < StartupProgressionTime)
+	{
+		StartupTime += DeltaTime;
+		const float ProgressAlpha = FMath::Clamp(StartupTime / StartupProgressionTime, 0.0f, 1.0f);
+		// Use chunk size * 2 as minimum to ensure we get at least some chunks
+		const float MinStartDistance = RenderSettings.RenderChunkSize * 2.0f;
+		const float StartDistance = FMath::Min(MinStartDistance, OriginalMaxRenderDistance * 0.25f);
+		RenderSettings.MaxRenderDistance = FMath::Lerp(StartDistance, OriginalMaxRenderDistance, ProgressAlpha);
+		
+		if (bEnableLogging && FMath::FloorToInt(StartupTime) != FMath::FloorToInt(StartupTime - DeltaTime))
+		{
+			UE_LOG(LogTemp, Log, TEXT("StaticWaterRenderer: Progressive loading - render distance: %.0f/%.0f"), 
+				RenderSettings.MaxRenderDistance, OriginalMaxRenderDistance);
 		}
 	}
 
@@ -399,14 +430,31 @@ void UStaticWaterRenderer::UpdateRenderChunks(float DeltaTime)
 	ChunksUpdatedThisFrame = 0;
 	ChunksBuiltThisFrame = 0;
 	
-	// Load new chunks
-	while (!ChunkLoadQueue.IsEmpty() && ChunksUpdatedThisFrame < RenderSettings.MaxChunksToUpdatePerFrame)
+	// Load new chunks (use progressive loading setting)
+	const int32 MaxChunksToCreate = RenderSettings.bUseProgressiveLoading ? 
+		RenderSettings.MaxChunksToCreatePerFrame : RenderSettings.MaxChunksToUpdatePerFrame;
+	
+	while (!ChunkLoadQueue.IsEmpty() && ChunksUpdatedThisFrame < MaxChunksToCreate)
 	{
 		FIntVector ChunkCoord;
 		if (ChunkLoadQueue.Dequeue(ChunkCoord))
 		{
+			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Loading chunk (%d, %d) - Frame limit: %d/%d"), 
+				ChunkCoord.X, ChunkCoord.Y, ChunksUpdatedThisFrame + 1, MaxChunksToCreate);
 			LoadRenderChunk(ChunkCoord);
 			++ChunksUpdatedThisFrame;
+		}
+	}
+	
+	// Debug: Show queue status
+	if (ChunksUpdatedThisFrame == 0 && ChunkLoadQueue.IsEmpty())
+	{
+		static float LastLogTime = 0.0f;
+		float CurrentTime = FPlatformTime::Seconds();
+		if (CurrentTime - LastLogTime > 2.0f) // Log every 2 seconds
+		{
+			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: No chunks in load queue, %d chunks loaded"), LoadedRenderChunks.Num());
+			LastLogTime = CurrentTime;
 		}
 	}
 	
@@ -420,12 +468,15 @@ void UStaticWaterRenderer::UpdateRenderChunks(float DeltaTime)
 		}
 	}
 	
-	// Build meshes for chunks that need it
+	// Build meshes for chunks that need it (use progressive loading setting)
 	FScopeLock Lock(&RenderChunkMutex);
+	const int32 MaxChunksToBuild = RenderSettings.bUseProgressiveLoading ? 
+		RenderSettings.MaxChunksToCreatePerFrame : RenderSettings.MaxChunksToUpdatePerFrame;
+		
 	for (auto& ChunkPair : LoadedRenderChunks)
 	{
 		FStaticWaterRenderChunk& Chunk = ChunkPair.Value;
-		if (Chunk.bNeedsRebuild && ChunksBuiltThisFrame < RenderSettings.MaxChunksToUpdatePerFrame)
+		if (Chunk.bNeedsRebuild && ChunksBuiltThisFrame < MaxChunksToBuild)
 		{
 			BuildChunkMesh(Chunk);
 			Chunk.bNeedsRebuild = false;
@@ -508,10 +559,18 @@ void UStaticWaterRenderer::UpdateActiveRenderChunks()
 	
 	TSet<FIntVector> NewActiveChunks;
 	
+	// Debug viewer positions
+	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Updating chunks for %d viewers, ChunkRadius: %d, MaxDistance: %.0f"), 
+		ViewerPositions.Num(), ChunkRadius, MaxDistance);
+	
 	// Determine which chunks should be active based on all viewers
-	for (const FVector& ViewerPos : ViewerPositions)
+	for (int32 ViewerIndex = 0; ViewerIndex < ViewerPositions.Num(); ++ViewerIndex)
 	{
+		const FVector& ViewerPos = ViewerPositions[ViewerIndex];
 		const FIntVector ViewerChunk = WorldPositionToRenderChunkCoord(ViewerPos);
+		
+		UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Viewer %d at %s -> Chunk (%d, %d)"), 
+			ViewerIndex, *ViewerPos.ToString(), ViewerChunk.X, ViewerChunk.Y);
 		
 		for (int32 X = -ChunkRadius; X <= ChunkRadius; ++X)
 		{
@@ -525,6 +584,11 @@ void UStaticWaterRenderer::UpdateActiveRenderChunks()
 				if (Distance <= MaxDistance)
 				{
 					NewActiveChunks.Add(ChunkCoord);
+					if (ViewerIndex == 0 && FMath::Abs(X) <= 1 && FMath::Abs(Y) <= 1) // Log nearby chunks only
+					{
+						UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Added chunk (%d, %d) at distance %.0f"), 
+							ChunkCoord.X, ChunkCoord.Y, Distance);
+					}
 				}
 			}
 		}
@@ -534,12 +598,20 @@ void UStaticWaterRenderer::UpdateActiveRenderChunks()
 	FScopeLock Lock(&RenderChunkMutex);
 	
 	// Queue chunks for loading
+	int32 ChunksQueued = 0;
 	for (const FIntVector& ChunkCoord : NewActiveChunks)
 	{
 		if (!ActiveRenderChunkCoords.Contains(ChunkCoord) && !LoadedRenderChunks.Contains(ChunkCoord))
 		{
 			ChunkLoadQueue.Enqueue(ChunkCoord);
+			ChunksQueued++;
 		}
+	}
+	
+	if (ChunksQueued > 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Queued %d chunks for loading from %d active chunks"), 
+			ChunksQueued, NewActiveChunks.Num());
 	}
 	
 	// Queue chunks for unloading
@@ -609,8 +681,9 @@ void UStaticWaterRenderer::LoadRenderChunk(const FIntVector& ChunkCoord)
 	NewChunk.MeshComponent = CreateMeshComponent(ChunkCoord);
 	NewChunk.bNeedsRebuild = true;
 	
-	UE_LOG(LogTemp, Verbose, TEXT("StaticWaterRenderer: 🌊 LOADED render chunk (%d, %d) at distance %.1fm, LOD%d"), 
-		ChunkCoord.X, ChunkCoord.Y, Distance, NewChunk.LODLevel);
+	// Force detailed logging for initial chunk loading to debug terrain sampling issue
+	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: 🌊 LOADED render chunk (%d, %d) at distance %.1fm, LOD%d [LOD0Dist=%.0f, LOD1Dist=%.0f]"), 
+		ChunkCoord.X, ChunkCoord.Y, Distance, NewChunk.LODLevel, RenderSettings.LOD0Distance, RenderSettings.LOD1Distance);
 }
 
 void UStaticWaterRenderer::UnloadRenderChunk(const FIntVector& ChunkCoord)
@@ -797,16 +870,41 @@ void UStaticWaterRenderer::GenerateWaterSurface(FStaticWaterRenderChunk& Chunk)
 	{
 		Chunk.WaterLevel = WaterLevel;
 		
-		if (Chunk.LODLevel == 0)
+		const FVector ChunkCenter = Chunk.WorldBounds.GetCenter();
+		const float DistanceToPlayer = GetClosestViewerDistance(ChunkCenter);
+		
+		// Check if the owning actor wants terrain adaptive meshes
+		bool bShouldUseAdaptiveMesh = (Chunk.LODLevel == 0);
+		bool bOwnerWantsAdaptive = true;
+		bool bHasValidVoxelIntegration = (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid());
+		
+		if (AActor* Owner = GetOwner())
 		{
-			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: 🌊 ADAPTIVE mesh for LOD0 chunk (%d, %d)"), 
-				Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y);
+			if (AVoxelStaticWaterActor* StaticWaterActor = Cast<AVoxelStaticWaterActor>(Owner))
+			{
+				bOwnerWantsAdaptive = StaticWaterActor->bUseTerrainAdaptiveMesh;
+				bShouldUseAdaptiveMesh = bShouldUseAdaptiveMesh && bOwnerWantsAdaptive;
+			}
+		}
+		
+		if (bShouldUseAdaptiveMesh && bHasValidVoxelIntegration)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: 🌊 ADAPTIVE mesh for LOD%d chunk (%d, %d) at distance %.0f [LOD0=%s, OwnerWants=%s, VoxelValid=%s]"), 
+				Chunk.LODLevel, Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y, DistanceToPlayer,
+				(Chunk.LODLevel == 0) ? TEXT("Y") : TEXT("N"),
+				bOwnerWantsAdaptive ? TEXT("Y") : TEXT("N"),
+				bHasValidVoxelIntegration ? TEXT("Y") : TEXT("N"));
 			GenerateAdaptiveWaterMesh(Chunk);
 		}
 		else
 		{
-			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: 📦 PLANAR mesh for LOD%d chunk (%d, %d)"), 
-				Chunk.LODLevel, Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y);
+			FString Reason;
+			if (!bHasValidVoxelIntegration) Reason += TEXT("NoVoxel ");
+			if (!bOwnerWantsAdaptive) Reason += TEXT("OwnerDisabled ");
+			if (Chunk.LODLevel != 0) Reason += FString::Printf(TEXT("LOD%d "), Chunk.LODLevel);
+			
+			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: 📦 PLANAR mesh for LOD%d chunk (%d, %d) at distance %.0f [Reason: %s]"), 
+				Chunk.LODLevel, Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y, DistanceToPlayer, *Reason.TrimEnd());
 			GeneratePlanarWaterMesh(Chunk, WaterLevel);
 		}
 	}
@@ -904,7 +1002,58 @@ void UStaticWaterRenderer::GenerateAdaptiveWaterMesh(FStaticWaterRenderChunk& Ch
 	TArray<FVector2D> TempUVs;
 	TArray<float> VertexTerrainHeights;
 	
+	// Batch sample all terrain heights for better performance
+	TArray<FVector> SamplePositions;
+	SamplePositions.Reserve(VertsPerSide * VertsPerSide);
+	
+	for (int32 Y = 0; Y < VertsPerSide; ++Y)
+	{
+		for (int32 X = 0; X < VertsPerSide; ++X)
+		{
+			const float WorldX = Bounds.Min.X + X * StepSize;
+			const float WorldY = Bounds.Min.Y + Y * StepSize;
+			SamplePositions.Add(FVector(WorldX, WorldY, 0.0f));
+		}
+	}
+	
+	// Batch sample terrain heights
+	TArray<float> BatchHeights;
+	if (VoxelIntegration && VoxelIntegration->IsValidLowLevel())
+	{
+		if (VoxelIntegration->IsVoxelWorldValid())
+		{
+			BatchHeights = VoxelIntegration->SampleVoxelHeightsBatch(SamplePositions);
+			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Batch sampled %d/%d terrain heights for chunk (%d, %d), WaterLevel: %.1f"), 
+				BatchHeights.Num(), SamplePositions.Num(), Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y, WaterLevel);
+				
+			// Log some sample heights for debugging
+			if (BatchHeights.Num() > 0)
+			{
+				float MinHeight = BatchHeights[0];
+				float MaxHeight = BatchHeights[0];
+				for (float Height : BatchHeights)
+				{
+					MinHeight = FMath::Min(MinHeight, Height);
+					MaxHeight = FMath::Max(MaxHeight, Height);
+				}
+				UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Terrain height range for chunk (%d, %d): %.1f to %.1f"), 
+					Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y, MinHeight, MaxHeight);
+			}
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: VoxelIntegration has no valid voxel world for chunk (%d, %d)"), 
+				Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y);
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: No valid VoxelIntegration for terrain sampling for chunk (%d, %d)"), 
+			Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y);
+	}
+	
 	// Create a regular grid of vertices - always create all vertices for proper UV mapping
+	int32 SampleIndex = 0;
 	for (int32 Y = 0; Y < VertsPerSide; ++Y)
 	{
 		for (int32 X = 0; X < VertsPerSide; ++X)
@@ -912,12 +1061,13 @@ void UStaticWaterRenderer::GenerateAdaptiveWaterMesh(FStaticWaterRenderChunk& Ch
 			const float WorldX = Bounds.Min.X + X * StepSize;
 			const float WorldY = Bounds.Min.Y + Y * StepSize;
 			
-			// Sample terrain height at this vertex position
+			// Get terrain height from batch sampling or use default
 			float TerrainHeight = WaterLevel - 100.0f; // Default to below water if no terrain data
-			if (VoxelIntegration && VoxelIntegration->IsValidLowLevel())
+			if (SampleIndex < BatchHeights.Num())
 			{
-				TerrainHeight = VoxelIntegration->SampleVoxelHeight(WorldX, WorldY);
+				TerrainHeight = BatchHeights[SampleIndex];
 			}
+			SampleIndex++;
 			
 			// Store the terrain height for later use when creating triangles
 			VertexTerrainHeights.Add(TerrainHeight);
@@ -1004,11 +1154,10 @@ void UStaticWaterRenderer::GenerateAdaptiveWaterMesh(FStaticWaterRenderChunk& Ch
 	Chunk.UVs = TempUVs;
 	Chunk.bHasWater = TempTriangles.Num() > 0; // Only has water if we have triangles
 	
-	if (bEnableLogging)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Generated ADAPTIVE mesh with %d vertices, %d triangles"), 
-			TempVertices.Num(), TempTriangles.Num() / 3);
-	}
+	// Always log adaptive mesh generation for debugging
+	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Generated ADAPTIVE mesh for chunk (%d, %d) with %d vertices, %d triangles, HasWater: %s"), 
+		Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y, TempVertices.Num(), TempTriangles.Num() / 3, 
+		(TempTriangles.Num() > 0) ? TEXT("YES") : TEXT("NO"));
 }
 
 void UStaticWaterRenderer::UpdateChunkMesh(FStaticWaterRenderChunk& Chunk)

@@ -38,6 +38,16 @@ DECLARE_CYCLE_STAT(TEXT("[18] Chunk Streaming"), STAT_VoxelFluid_ChunkStreaming,
 DECLARE_DWORD_COUNTER_STAT(TEXT("[19] Rendered"), STAT_VoxelFluid_RenderedChunks, STATGROUP_VoxelFluid);
 DECLARE_DWORD_COUNTER_STAT(TEXT("[20] Active Regions"), STAT_VoxelFluid_ActiveRegions, STATGROUP_VoxelFluid);
 
+// === INITIALIZATION PROFILING ===
+DECLARE_CYCLE_STAT(TEXT("[INIT] Begin Play"), STAT_VoxelFluid_BeginPlay, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[INIT] System Init"), STAT_VoxelFluid_SystemInit, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[INIT] Chunk System"), STAT_VoxelFluid_ChunkSystemInit, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[INIT] Voxel Integration"), STAT_VoxelFluid_VoxelIntegrationInit, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[INIT] Visualization Init"), STAT_VoxelFluid_VisualizationInit, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[INIT] Static Water Init"), STAT_VoxelFluid_StaticWaterInit, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[INIT] First Chunk Load"), STAT_VoxelFluid_FirstChunkLoad, STATGROUP_VoxelFluid);
+DECLARE_CYCLE_STAT(TEXT("[INIT] Auto Start"), STAT_VoxelFluid_AutoStart, STATGROUP_VoxelFluid);
+
 // =====================================================
 //  HIDDEN STATS (Declared but not displayed)
 // =====================================================

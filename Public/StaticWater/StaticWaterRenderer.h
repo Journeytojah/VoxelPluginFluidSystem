@@ -63,21 +63,21 @@ struct VOXELFLUIDSYSTEM_API FStaticWaterRenderSettings
 
 	// Chunk settings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (ClampMin = "1000", ClampMax = "10000"))
-	float RenderChunkSize = 6400.0f; // 64x64m render chunks for better performance
+	float RenderChunkSize = 12800.0f; // Larger 128x128m render chunks for fewer chunks and better startup performance
 
 	// Ring rendering settings - static water only renders between MinRenderDistance and MaxRenderDistance
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ring Rendering", meta = (ClampMin = "1000", ClampMax = "10000"))
 	float MinRenderDistance = 3000.0f; // Don't render static water closer than this (let simulation handle it)
 	
 	// LOD settings
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LOD", meta = (ClampMin = "500", ClampMax = "15000"))
-	float LOD0Distance = 10000.0f; // Much larger for quality terrain-adaptive water
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LOD", meta = (ClampMin = "500", ClampMax = "25000"))
+	float LOD0Distance = 15000.0f; // Increased to cover at least one full chunk around player with 12800 chunk size
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LOD", meta = (ClampMin = "1000", ClampMax = "20000"))
-	float LOD1Distance = 15000.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LOD", meta = (ClampMin = "1000", ClampMax = "30000"))
+	float LOD1Distance = 25000.0f; // Adjusted proportionally
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LOD", meta = (ClampMin = "5000", ClampMax = "50000"))
-	float MaxRenderDistance = 25000.0f; // Larger render distance
+	float MaxRenderDistance = 32000.0f; // Increased to cover ocean size (25000) with chunk size (12800) = ~3 chunk radius
 
 	// Culling settings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Culling")
@@ -109,11 +109,17 @@ struct VOXELFLUIDSYSTEM_API FStaticWaterRenderSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "1", ClampMax = "32"))
 	int32 MaxChunksToUpdatePerFrame = 4;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "1", ClampMax = "16"))
+	int32 MaxChunksToCreatePerFrame = 2; // Limit initial chunk creation for faster startup
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "10", ClampMax = "1000"))
-	int32 MaxRenderChunks = 200;
+	int32 MaxRenderChunks = 100; // Reduced for faster startup
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (ClampMin = "0.01", ClampMax = "1.0"))
-	float UpdateFrequency = 0.05f; // 20 FPS updates
+	float UpdateFrequency = 0.1f; // Reduced frequency for better startup performance
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
+	bool bUseProgressiveLoading = true; // Enable progressive chunk loading to prevent startup lag
 };
 
 /**
@@ -286,4 +292,9 @@ private:
 	mutable FCriticalSection RenderChunkMutex;
 
 	bool bIsInitialized = false;
+	
+	// Startup optimization
+	float StartupTime = 0.0f;
+	float OriginalMaxRenderDistance = 0.0f;
+	static constexpr float StartupProgressionTime = 3.0f; // Gradually increase render distance over 3 seconds
 };
