@@ -227,6 +227,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain", meta = (EditCondition = "bUseTerrainAdaptiveMesh"))
 	EVoxelSamplingMethod SamplingMethod = EVoxelSamplingMethod::VoxelQuery;
 	
+	// Runtime Volume Layer for terrain modifications
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain|Runtime Modifications")
+	bool bUseRuntimeVolumeLayer = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain|Runtime Modifications", meta = (EditCondition = "bUseRuntimeVolumeLayer"))
+	FVoxelStackLayer RuntimeVolumeLayer;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain|Runtime Modifications", meta = (EditCondition = "bUseRuntimeVolumeLayer", ClampMin = "0.0", ClampMax = "100.0"))
+	float TerrainUpdateRadius = 50.0f;
+	
 	// Material Settings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Materials")
 	UMaterialInterface* WaterMaterial = nullptr;

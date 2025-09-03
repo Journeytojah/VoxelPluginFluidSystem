@@ -262,6 +262,31 @@ void AVoxelStaticWaterActor::InitializeStaticWaterSystem()
 	if (VoxelIntegration && TargetVoxelWorld)
 	{
 		VoxelIntegration->InitializeFluidSystem(TargetVoxelWorld);
+		
+		// Configure runtime volume layer if enabled
+		if (bUseRuntimeVolumeLayer)
+		{
+			VoxelIntegration->SetSecondaryVolumeLayer(RuntimeVolumeLayer);
+			VoxelIntegration->EnableCombinedSampling(true);
+			
+			// When using runtime volume layer, we need 3D voxel terrain to properly detect holes
+			VoxelIntegration->bUse3DVoxelTerrain = true;
+			
+			// Configure the 3D terrain layer to match the base terrain layer
+			if (TerrainLayer.Layer != nullptr)
+			{
+				VoxelIntegration->Terrain3DLayer = TerrainLayer;
+				VoxelIntegration->bUseSeparate3DLayer = true;
+			}
+			
+			UE_LOG(LogTemp, Log, TEXT("VoxelStaticWaterActor: Configured runtime volume layer with 3D terrain for modifications"));
+			
+			// Trigger initial 3D terrain update
+			if (VoxelIntegration->IsUsingChunkedSystem())
+			{
+				VoxelIntegration->Update3DVoxelTerrain();
+			}
+		}
 	}
 
 	// Set up voxel world connection
@@ -569,7 +594,45 @@ void AVoxelStaticWaterActor::OnTerrainEdited(const FVector& EditPosition, float 
 
 void AVoxelStaticWaterActor::OnVoxelTerrainModified(const FVector& ModifiedPosition, float ModifiedRadius)
 {
+	// First handle dynamic water activation if needed
 	OnTerrainEdited(ModifiedPosition, ModifiedRadius, MinDisturbanceForActivation + 1.0f);
+	
+	// Now update the voxel integration to refresh solid cells
+	if (VoxelIntegration)
+	{
+		// When using runtime volume layer with combined sampling, OnRuntimeTerrainModified handles everything
+		if (bUseRuntimeVolumeLayer && VoxelIntegration->bEnableCombinedSampling)
+		{
+			// This will clear cache, update terrain region, and wake fluid
+			VoxelIntegration->OnRuntimeTerrainModified(ModifiedPosition, ModifiedRadius);
+		}
+		else if (VoxelIntegration->bUse3DVoxelTerrain)
+		{
+			// For regular 3D voxel terrain without runtime volume layer
+			// First clear the cache
+			VoxelIntegration->ForceRefreshVoxelCache();
+			
+			// Then refresh the affected area
+			VoxelIntegration->RefreshTerrainInRadius(ModifiedPosition, ModifiedRadius);
+		}
+		else
+		{
+			// For 2D terrain, just update the terrain heights
+			VoxelIntegration->UpdateTerrainHeights();
+		}
+		
+		UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Triggered terrain update at %s radius %.1f (RuntimeLayer=%s, Combined=%s, 3D=%s)"), 
+			*ModifiedPosition.ToString(), ModifiedRadius,
+			bUseRuntimeVolumeLayer ? TEXT("Yes") : TEXT("No"),
+			VoxelIntegration->bEnableCombinedSampling ? TEXT("Yes") : TEXT("No"),
+			VoxelIntegration->bUse3DVoxelTerrain ? TEXT("Yes") : TEXT("No"));
+	}
+	
+	// Also trigger mesh regeneration for static water renderer
+	if (StaticWaterRenderer)
+	{
+		StaticWaterRenderer->ForceRebuildAllChunks();
+	}
 }
 
 void AVoxelStaticWaterActor::RefreshTerrainDataInRadius(const FVector& Center, float Radius)

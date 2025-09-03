@@ -177,7 +177,30 @@ float UVoxelFluidIntegration::SampleVoxelHeight(float WorldX, float WorldY)
 	UObject* WorldContext = IsVoxelWorldValid() ? static_cast<UObject*>(VoxelWorld) : static_cast<UObject*>(GetWorld());
 	
 	float Height = 0.0f;
-	if (bUseVoxelLayerSampling && TerrainLayer.Layer != nullptr)
+	
+	// Check if we need to combine multiple layers
+	if (bEnableCombinedSampling && SecondaryVolumeLayer.Layer != nullptr)
+	{
+		// Sample both the base terrain and the runtime volume layer
+		float BaseHeight = 0.0f;
+		float VolumeHeight = 0.0f;
+		
+		if (bUseVoxelLayerSampling && TerrainLayer.Layer != nullptr)
+		{
+			BaseHeight = UVoxelTerrainSampler::SampleTerrainHeightAtLocationWithLayer(WorldContext, SampleLocation, TerrainLayer, SamplingMethod);
+		}
+		else
+		{
+			BaseHeight = UVoxelTerrainSampler::SampleTerrainHeightAtLocation(WorldContext, SampleLocation);
+		}
+		
+		// Sample the secondary volume layer (runtime modifications)
+		VolumeHeight = UVoxelTerrainSampler::SampleTerrainHeightAtLocationWithLayer(WorldContext, SampleLocation, SecondaryVolumeLayer, SamplingMethod);
+		
+		// Combine the heights - use the higher value (additive terrain)
+		Height = FMath::Max(BaseHeight, VolumeHeight);
+	}
+	else if (bUseVoxelLayerSampling && TerrainLayer.Layer != nullptr)
 	{
 		Height = UVoxelTerrainSampler::SampleTerrainHeightAtLocationWithLayer(WorldContext, SampleLocation, TerrainLayer, SamplingMethod);
 	}
@@ -1013,6 +1036,77 @@ bool UVoxelFluidIntegration::QueryVoxelAtPosition(const FVector& WorldPosition, 
 	if (!IsVoxelWorldValid())
 		return false;
 	
+	// Check if we need to combine with secondary volume layer FIRST
+	if (bEnableCombinedSampling && SecondaryVolumeLayer.Layer != nullptr)
+	{
+		// Query both the base layer and the secondary volume layer
+		float BaseValue = FLT_MAX;
+		float VolumeValue = FLT_MAX;
+		
+		// Query base layer
+		const FVoxelStackLayer* BaseLayer = nullptr;
+		if (bUse3DVoxelTerrain && bUseSeparate3DLayer && Terrain3DLayer.Layer != nullptr)
+		{
+			BaseLayer = &Terrain3DLayer;
+		}
+		else if (TerrainLayer.Layer != nullptr)
+		{
+			BaseLayer = &TerrainLayer;
+		}
+		
+		if (BaseLayer != nullptr)
+		{
+			FVoxelQueryResult QueryResult;
+			TArray<UVoxelFloatMetadata*> EmptyMetadata;
+			
+			if (UVoxelLayersBlueprintLibrary::QueryVoxelLayer(
+				VoxelWorld, 
+				*BaseLayer, 
+				WorldPosition, 
+				false, 
+				EmptyMetadata, 
+				0, 
+				QueryResult))
+			{
+				BaseValue = QueryResult.Value;
+			}
+		}
+		
+		// Query secondary volume layer (runtime modifications)
+		{
+			FVoxelQueryResult QueryResult;
+			TArray<UVoxelFloatMetadata*> EmptyMetadata;
+			
+			if (UVoxelLayersBlueprintLibrary::QueryVoxelLayer(
+				VoxelWorld, 
+				SecondaryVolumeLayer, 
+				WorldPosition, 
+				false, 
+				EmptyMetadata, 
+				0, 
+				QueryResult))
+			{
+				VolumeValue = QueryResult.Value;
+			}
+		}
+		
+		// Combine values - use MAX for additive terrain (positive values = empty space)
+		OutVoxelValue = FMath::Max(BaseValue, VolumeValue);
+		
+		if (bLogVoxelValues)
+		{
+			static int32 LogCounter = 0;
+			if (LogCounter++ % 1000 == 0)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Combined voxel query at %s: Base=%.2f, Volume=%.2f, Final=%.2f"), 
+					*WorldPosition.ToString(), BaseValue, VolumeValue, OutVoxelValue);
+			}
+		}
+		
+		return true;
+	}
+	
+	// Original single layer logic
 	// Determine which layer to use
 	const FVoxelStackLayer* LayerToUse = nullptr;
 	
@@ -1609,4 +1703,112 @@ void UVoxelFluidIntegration::SampleChunkTerrainBatch(const FFluidChunkCoord& Chu
 			}
 		}
 	}
+}
+
+void UVoxelFluidIntegration::SetSecondaryVolumeLayer(const FVoxelStackLayer& InSecondaryLayer)
+{
+	SecondaryVolumeLayer = InSecondaryLayer;
+	
+	if (bEnableCombinedSampling && SecondaryVolumeLayer.Layer != nullptr)
+	{
+		UE_LOG(LogTemp, Log, TEXT("VoxelFluidIntegration: Set secondary volume layer for runtime terrain modifications"));
+		// Clear terrain cache to force resampling with combined layers
+		TerrainHeightCache.Empty();
+		bTerrainNeedsRefresh = true;
+	}
+}
+
+void UVoxelFluidIntegration::EnableCombinedSampling(bool bEnable)
+{
+	if (bEnableCombinedSampling != bEnable)
+	{
+		bEnableCombinedSampling = bEnable;
+		
+		if (bEnable && SecondaryVolumeLayer.Layer != nullptr)
+		{
+			UE_LOG(LogTemp, Log, TEXT("VoxelFluidIntegration: Enabled combined sampling with secondary volume layer"));
+			// Clear terrain cache to force resampling
+			TerrainHeightCache.Empty();
+			bTerrainNeedsRefresh = true;
+		}
+		else if (!bEnable)
+		{
+			UE_LOG(LogTemp, Log, TEXT("VoxelFluidIntegration: Disabled combined sampling"));
+			// Clear cache and refresh with single layer
+			TerrainHeightCache.Empty();
+			bTerrainNeedsRefresh = true;
+		}
+	}
+}
+
+void UVoxelFluidIntegration::OnRuntimeTerrainModified(const FVector& ModifiedCenter, float ModifiedRadius)
+{
+	if (!bEnableCombinedSampling || !IsVoxelWorldValid())
+	{
+		return;
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidIntegration: Runtime terrain modified at %s with radius %.1f"), 
+		*ModifiedCenter.ToString(), ModifiedRadius);
+	
+	// Clear cache in modified area first
+	FBox ModifiedBounds = FBox::BuildAABB(ModifiedCenter, FVector(ModifiedRadius));
+	
+	// Remove cached terrain height entries within modified bounds
+	TArray<FIntPoint> KeysToRemove;
+	for (const auto& CacheEntry : TerrainHeightCache)
+	{
+		FVector WorldPos(CacheEntry.Value.Position.X, CacheEntry.Value.Position.Y, 0.0f);
+		if (ModifiedBounds.IsInsideXY(WorldPos))
+		{
+			KeysToRemove.Add(CacheEntry.Key);
+		}
+	}
+	
+	for (const FIntPoint& Key : KeysToRemove)
+	{
+		TerrainHeightCache.Remove(Key);
+	}
+	
+	// Clear cached voxel states in the modified region
+	if (bUse3DVoxelTerrain)
+	{
+		// Clear cached voxel solid states for cells in the modified area
+		TArray<FIntVector> VoxelKeysToRemove;
+		for (const auto& CachedState : CachedVoxelStates)
+		{
+			// Convert cached key to world position (rough approximation)
+			FVector CellWorldPos = GridWorldOrigin + FVector(
+				CachedState.Key.X * CellWorldSize,
+				CachedState.Key.Y * CellWorldSize,
+				CachedState.Key.Z * CellWorldSize
+			);
+			
+			if (ModifiedBounds.IsInside(CellWorldPos))
+			{
+				VoxelKeysToRemove.Add(CachedState.Key);
+			}
+		}
+		
+		for (const FIntVector& VoxelKey : VoxelKeysToRemove)
+		{
+			CachedVoxelStates.Remove(VoxelKey);
+		}
+		
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidIntegration: Cleared %d cached voxel states in modified region"), VoxelKeysToRemove.Num());
+	}
+	
+	// Add to pending terrain updates
+	{
+		FScopeLock Lock(&TerrainUpdateMutex);
+		PendingTerrainUpdates.Add(ModifiedBounds);
+	}
+	
+	// Update terrain in modified region - this will re-query the combined layers
+	UpdateTerrainInRegion(ModifiedBounds);
+	
+	// Wake fluid in radius to handle new terrain
+	WakeFluidInRadius(ModifiedCenter, ModifiedRadius);
+	
+	UE_LOG(LogTemp, Warning, TEXT("VoxelFluidIntegration: Completed terrain update for runtime modification"));
 }

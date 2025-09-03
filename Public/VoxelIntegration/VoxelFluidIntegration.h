@@ -96,6 +96,19 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
 	bool IsVoxelWorldValid() const;
+	
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid")
+	bool IsUsingChunkedSystem() const { return bUseChunkedSystem; }
+	
+	// Secondary volume layer support for runtime terrain modifications
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid|Runtime Modifications")
+	void SetSecondaryVolumeLayer(const FVoxelStackLayer& InSecondaryLayer);
+	
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid|Runtime Modifications")
+	void EnableCombinedSampling(bool bEnable);
+	
+	UFUNCTION(BlueprintCallable, Category = "Voxel Fluid|Runtime Modifications")
+	void OnRuntimeTerrainModified(const FVector& ModifiedCenter, float ModifiedRadius);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Fluid")
 	AActor* VoxelWorld;
@@ -177,6 +190,14 @@ public:
 	bool bAutoRefreshAfterSculpting = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain", meta = (DisplayName = "Refresh Interval", EditCondition = "bUse3DVoxelTerrain && bAutoRefreshAfterSculpting"))
+	float RefreshInterval = 0.5f;
+	
+	// Runtime volume layer for terrain modifications
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain|Runtime Modifications")
+	FVoxelStackLayer SecondaryVolumeLayer;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain|Runtime Modifications")
+	bool bEnableCombinedSampling = false;
 	float TerrainRefreshInterval = 0.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain", meta = (DisplayName = "Use Multiple Sample Points", EditCondition = "bUse3DVoxelTerrain"))
