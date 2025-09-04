@@ -123,10 +123,10 @@ public:
 	bool bUseFixedTimestep = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (ClampMin = "16", ClampMax = "128"))
-	int32 ChunkSize = 32; // Reverted to standard size for performance
+	int32 ChunkSize = 64; // Increased from 32 to 64 for better resolution (4x more cells)
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chunk Settings", meta = (ClampMin = "10.0", ClampMax = "200.0"))
-	float CellSize = 100.0f; // Reverted to 100cm for better performance
+	float CellSize = 25.0f; // Reduced to 25cm for even better resolution (16x more cells than original)
 	
 	// High Resolution Mode Settings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "High Resolution Mode")

@@ -67,8 +67,8 @@ int32 FChunkPersistentData::GetMemorySize() const
 
 UFluidChunk::UFluidChunk()
 {
-	ChunkSize = 32;
-	CellSize = 100.0f;
+	ChunkSize = 64; // Increased from 32 to 64 for better resolution
+	CellSize = 25.0f; // Reduced to 25cm for maximum resolution
 	FlowRate = 0.5f;
 	Viscosity = 0.1f;
 	Gravity = 981.0f;

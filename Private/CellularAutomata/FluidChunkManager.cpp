@@ -10,8 +10,8 @@
 
 UFluidChunkManager::UFluidChunkManager()
 {
-	ChunkSize = 32;
-	CellSize = 100.0f;
+	ChunkSize = 64; // Increased from 32 to 64 for better resolution
+	CellSize = 25.0f; // Reduced to 25cm for maximum resolution
 	WorldOrigin = FVector::ZeroVector;
 	WorldSize = FVector(100000.0f, 100000.0f, 10000.0f);
 

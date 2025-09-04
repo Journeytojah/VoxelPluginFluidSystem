@@ -73,8 +73,8 @@ AVoxelFluidActor::AVoxelFluidActor()
 	WaterActivationManager = CreateDefaultSubobject<UWaterActivationManager>(TEXT("WaterActivationManager"));
 
 	// Default performance-friendly settings
-	ChunkSize = 32;  // Standard chunk size (reverted from 64)
-	CellSize = 100.0f;  // Normal cell size for good performance (reverted from 25.0f)
+	ChunkSize = 64;  // Increased to 64 for better resolution
+	CellSize = 25.0f;  // Reduced to 25cm for maximum resolution
 	ChunkLoadDistance = 8000.0f;
 	ChunkActiveDistance = 5000.0f;
 	MaxActiveChunks = 50;  // Reasonable limit for performance (reverted from 200)

@@ -18,7 +18,7 @@ UVoxelFluidIntegration::UVoxelFluidIntegration()
 	GridResolutionX = 128;
 	GridResolutionY = 128;
 	GridResolutionZ = 32;
-	CellWorldSize = 100.0f;
+	CellWorldSize = 25.0f; // Reduced to 25cm for maximum solid cell resolution
 	bAutoUpdateTerrain = true;
 	TerrainUpdateInterval = 1.0f;
 	// bDebugDrawCells removed - debug drawing handled by FluidVisualizationComponent
@@ -1259,6 +1259,11 @@ bool UVoxelFluidIntegration::CheckIfCellIsSolid(const FVector& CellCenter, int32
 		return false;
 	}
 	
+	// Special handling for cells near water surface - allow overshoot like static mesh
+	// This is particularly important for shore/edge cells
+	const float WaterLevel = 0.0f; // Assuming water at sea level, adjust as needed
+	const float OvershootDepth = 50.0f; // Allow 50cm overshoot into terrain, matching static mesh
+	
 	// Check if we have a valid layer configured
 	bool bHasValidLayer = false;
 	if (bUse3DVoxelTerrain && bUseSeparate3DLayer)
@@ -1286,10 +1291,13 @@ bool UVoxelFluidIntegration::CheckIfCellIsSolid(const FVector& CellCenter, int32
 	{
 		// Sample multiple points within the cell to better detect partial solid cells
 		int32 SolidCount = 0;
-		const float HalfCell = CellWorldSize * 0.4f; // Sample 80% of cell
+		// Reduce sampling area to allow more overshoot at edges
+		// This matches static water mesh behavior which overshoots into terrain
+		const float HalfCell = CellWorldSize * 0.35f; // Sample 70% of cell to allow edge overshoot
 		
-		// Sample 8 corners of the cell
+		// Sample corners plus face centers for better edge detection
 		const FVector SampleOffsets[] = {
+			// 8 corners
 			FVector(-HalfCell, -HalfCell, -HalfCell),
 			FVector(HalfCell, -HalfCell, -HalfCell),
 			FVector(-HalfCell, HalfCell, -HalfCell),
@@ -1298,7 +1306,15 @@ bool UVoxelFluidIntegration::CheckIfCellIsSolid(const FVector& CellCenter, int32
 			FVector(HalfCell, -HalfCell, HalfCell),
 			FVector(-HalfCell, HalfCell, HalfCell),
 			FVector(HalfCell, HalfCell, HalfCell),
-			FVector(0, 0, 0) // Center point
+			// 6 face centers for better edge detection
+			FVector(0, 0, -HalfCell), // Bottom
+			FVector(0, 0, HalfCell),  // Top
+			FVector(-HalfCell, 0, 0), // Left
+			FVector(HalfCell, 0, 0),  // Right
+			FVector(0, -HalfCell, 0), // Front
+			FVector(0, HalfCell, 0),  // Back
+			// Center
+			FVector(0, 0, 0)
 		};
 		
 		for (const FVector& Offset : SampleOffsets)
@@ -1319,8 +1335,36 @@ bool UVoxelFluidIntegration::CheckIfCellIsSolid(const FVector& CellCenter, int32
 			}
 		}
 		
-		// Consider cell solid if majority of sample points are solid
-		bool bResult = (SolidCount >= 5); // More than half of 9 points
+		// Apply same overshoot logic as static water mesh
+		// Static mesh allows water up to 50cm into terrain for good shore coverage
+		// We should be similarly permissive at edges
+		bool bResult = false;
+		
+		// Only mark as solid if we have strong evidence of solid terrain
+		// This allows water to flow into edges and corners like the static mesh
+		if (SolidCount >= 10) // Need 2/3 of points to be solid (10/15)
+		{
+			bResult = true; // Definitely solid
+		}
+		else if (SolidCount <= 3) // Very few solid points
+		{
+			bResult = false; // Allow water for edge overshoot
+		}
+		else // 4-9 solid points - edge case
+		{
+			// For edge cells, be more permissive to match static mesh behavior
+			// Check if cell is at typical shore height
+			if (CellCenter.Z > WaterLevel - OvershootDepth && CellCenter.Z < WaterLevel + 100.0f)
+			{
+				// Near water level - allow overshoot
+				bResult = (SolidCount >= 8); // Need more evidence at shore
+			}
+			else
+			{
+				// Not near shore - normal threshold
+				bResult = (SolidCount >= 6);
+			}
+		}
 		
 		// Log detailed info for debugging
 		if (bLogVoxelValues && GridX % 20 == 0 && GridY % 20 == 0 && GridZ == 5)
