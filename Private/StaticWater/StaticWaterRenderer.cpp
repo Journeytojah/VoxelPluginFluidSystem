@@ -207,6 +207,14 @@ void UStaticWaterRenderer::SetVoxelIntegration(UVoxelFluidIntegration* InVoxelIn
 	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: VoxelIntegration set to %s"), 
 		VoxelIntegration ? TEXT("Valid") : TEXT("Null"));
 	
+	if (VoxelIntegration)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: VoxelIntegration details - VoxelWorldValid=%s, TerrainLayer=%s, bUseVoxelLayerSampling=%s"), 
+			VoxelIntegration->IsVoxelWorldValid() ? TEXT("true") : TEXT("false"),
+			VoxelIntegration->TerrainLayer.Layer ? TEXT("valid") : TEXT("null"),
+			VoxelIntegration->bUseVoxelLayerSampling ? TEXT("true") : TEXT("false"));
+	}
+	
 	// Force rebuild all chunks when voxel integration changes
 	ForceRebuildAllChunks();
 }
@@ -559,9 +567,9 @@ void UStaticWaterRenderer::UpdateActiveRenderChunks()
 	
 	TSet<FIntVector> NewActiveChunks;
 	
-	// Debug viewer positions
-	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Updating chunks for %d viewers, ChunkRadius: %d, MaxDistance: %.0f"), 
-		ViewerPositions.Num(), ChunkRadius, MaxDistance);
+	// // Debug viewer positions
+	// UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Updating chunks for %d viewers, ChunkRadius: %d, MaxDistance: %.0f"), 
+	// 	ViewerPositions.Num(), ChunkRadius, MaxDistance);
 	
 	// Determine which chunks should be active based on all viewers
 	for (int32 ViewerIndex = 0; ViewerIndex < ViewerPositions.Num(); ++ViewerIndex)
@@ -569,8 +577,8 @@ void UStaticWaterRenderer::UpdateActiveRenderChunks()
 		const FVector& ViewerPos = ViewerPositions[ViewerIndex];
 		const FIntVector ViewerChunk = WorldPositionToRenderChunkCoord(ViewerPos);
 		
-		UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Viewer %d at %s -> Chunk (%d, %d)"), 
-			ViewerIndex, *ViewerPos.ToString(), ViewerChunk.X, ViewerChunk.Y);
+		// UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Viewer %d at %s -> Chunk (%d, %d)"), 
+		// 	ViewerIndex, *ViewerPos.ToString(), ViewerChunk.X, ViewerChunk.Y);
 		
 		for (int32 X = -ChunkRadius; X <= ChunkRadius; ++X)
 		{
@@ -584,11 +592,11 @@ void UStaticWaterRenderer::UpdateActiveRenderChunks()
 				if (Distance <= MaxDistance)
 				{
 					NewActiveChunks.Add(ChunkCoord);
-					if (ViewerIndex == 0 && FMath::Abs(X) <= 1 && FMath::Abs(Y) <= 1) // Log nearby chunks only
-					{
-						UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Added chunk (%d, %d) at distance %.0f"), 
-							ChunkCoord.X, ChunkCoord.Y, Distance);
-					}
+					// if (ViewerIndex == 0 && FMath::Abs(X) <= 1 && FMath::Abs(Y) <= 1) // Log nearby chunks only
+					// {
+					// 	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Added chunk (%d, %d) at distance %.0f"), 
+					// 		ChunkCoord.X, ChunkCoord.Y, Distance);
+					// }
 				}
 			}
 		}
@@ -877,6 +885,14 @@ void UStaticWaterRenderer::GenerateWaterSurface(FStaticWaterRenderChunk& Chunk)
 		bool bShouldUseAdaptiveMesh = (Chunk.LODLevel == 0);
 		bool bOwnerWantsAdaptive = true;
 		bool bHasValidVoxelIntegration = (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid());
+		
+		if (!bHasValidVoxelIntegration)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Invalid VoxelIntegration for chunk (%d, %d) - VoxelIntegration=%s, VoxelWorldValid=%s"), 
+				Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y,
+				VoxelIntegration ? TEXT("Valid") : TEXT("Null"),
+				(VoxelIntegration && VoxelIntegration->IsVoxelWorldValid()) ? TEXT("true") : TEXT("false"));
+		}
 		
 		if (AActor* Owner = GetOwner())
 		{

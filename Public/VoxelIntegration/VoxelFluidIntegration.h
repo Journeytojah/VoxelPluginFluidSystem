@@ -212,10 +212,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel Terrain Debug", meta = (DisplayName = "Log Voxel Values", EditCondition = "bUse3DVoxelTerrain"))
 	bool bLogVoxelValues = false;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel System", meta = (DisplayName = "Use Chunked System"))
+	bool bUseChunkedSystem = false;
+
 private:
 	float TerrainUpdateTimer = 0.0f;
 	FVector GridWorldOrigin;
-	bool bUseChunkedSystem = false;
 
 	// Terrain change tracking
 	TMap<FIntVector, bool> CachedVoxelStates;

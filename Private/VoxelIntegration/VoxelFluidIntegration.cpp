@@ -1587,13 +1587,63 @@ TArray<float> UVoxelFluidIntegration::SampleVoxelHeightsBatch(const TArray<FVect
 	
 	UObject* WorldContext = IsVoxelWorldValid() ? static_cast<UObject*>(VoxelWorld) : static_cast<UObject*>(GetWorld());
 	
+	UE_LOG(LogTemp, Warning, TEXT("SampleVoxelHeightsBatch: Positions=%d, bUseVoxelLayerSampling=%s, TerrainLayer.Layer=%s, VoxelWorldValid=%s"), 
+		Positions.Num(),
+		bUseVoxelLayerSampling ? TEXT("true") : TEXT("false"),
+		TerrainLayer.Layer ? TEXT("valid") : TEXT("null"),
+		IsVoxelWorldValid() ? TEXT("true") : TEXT("false"));
+	
 	if (bUseVoxelLayerSampling && TerrainLayer.Layer != nullptr)
 	{
+		// Sample the base terrain heights first
+		UE_LOG(LogTemp, Warning, TEXT("SampleVoxelHeightsBatch: Sampling base terrain heights with SamplingMethod=%d"), (int32)SamplingMethod);
 		UVoxelTerrainSampler::SampleTerrainAtPositionsWithLayer(WorldContext, Positions, TerrainLayer, Heights, SamplingMethod);
+		
+		// If we have a secondary volume layer (runtime edits), check if positions are carved out
+		if (bEnableCombinedSampling && SecondaryVolumeLayer.Layer != nullptr)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("SampleVoxelHeightsBatch: Checking runtime volume layer for modifications"));
+			
+			TArray<float> VolumeValues;
+			UVoxelTerrainSampler::SampleTerrainAtPositionsWithLayer(WorldContext, Positions, SecondaryVolumeLayer, VolumeValues, SamplingMethod);
+			
+			// Process each position - if volume layer indicates air/carved (positive value), lower the height
+			for (int32 i = 0; i < FMath::Min(Heights.Num(), VolumeValues.Num()); i++)
+			{
+				// Volume layers: negative = solid, positive = empty/carved
+				if (VolumeValues[i] > 0.0f)  // Position has been carved out
+				{
+					// Lower the terrain height significantly to indicate a hole
+					Heights[i] -= 10000.0f;  // Push it way down so water flows in
+					
+					if (i < 10)  // Log first few for debugging
+					{
+						UE_LOG(LogTemp, VeryVerbose, TEXT("Position %d carved: Volume=%.1f, Height adjusted from %.1f to %.1f"), 
+							i, VolumeValues[i], Heights[i] + 10000.0f, Heights[i]);
+					}
+				}
+			}
+			
+			UE_LOG(LogTemp, Warning, TEXT("SampleVoxelHeightsBatch: Processed %d positions with runtime modifications"), VolumeValues.Num());
+		}
 	}
 	else
 	{
+		UE_LOG(LogTemp, Warning, TEXT("SampleVoxelHeightsBatch: Using fallback terrain sampling"));
 		UVoxelTerrainSampler::SampleTerrainAtPositions(WorldContext, Positions, Heights);
+	}
+	
+	if (Heights.Num() > 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SampleVoxelHeightsBatch: Sampled %d heights, first few: [0]=%.1f, [1]=%.1f, [2]=%.1f"), 
+			Heights.Num(),
+			Heights.Num() > 0 ? Heights[0] : 0.0f,
+			Heights.Num() > 1 ? Heights[1] : 0.0f,
+			Heights.Num() > 2 ? Heights[2] : 0.0f);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("SampleVoxelHeightsBatch: No heights returned!"));
 	}
 	
 	// Cache all the results if caching is enabled
@@ -1745,6 +1795,13 @@ void UVoxelFluidIntegration::OnRuntimeTerrainModified(const FVector& ModifiedCen
 {
 	if (!bEnableCombinedSampling || !IsVoxelWorldValid())
 	{
+		return;
+	}
+	
+	// Runtime terrain modification requires chunked system for proper operation
+	if (!bUseChunkedSystem)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("VoxelFluidIntegration: OnRuntimeTerrainModified called but chunked system is disabled - use RefreshTerrainInRadius instead"));
 		return;
 	}
 	

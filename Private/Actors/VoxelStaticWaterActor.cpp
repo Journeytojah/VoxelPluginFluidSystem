@@ -59,8 +59,7 @@ AVoxelStaticWaterActor::AVoxelStaticWaterActor()
 	StaticWaterGenerator = CreateDefaultSubobject<UStaticWaterGenerator>(TEXT("StaticWaterGenerator"));
 	StaticWaterRenderer = CreateDefaultSubobject<UStaticWaterRenderer>(TEXT("StaticWaterRenderer"));
 	WaterActivationManager = CreateDefaultSubobject<UWaterActivationManager>(TEXT("WaterActivationManager"));
-	// VoxelIntegration will be obtained from VoxelFluidActor to avoid duplicate terrain sampling
-	VoxelIntegration = nullptr;
+	VoxelIntegration = CreateDefaultSubobject<UVoxelFluidIntegration>(TEXT("VoxelIntegration"));
 
 	// Default settings
 	bAutoInitialize = true;
@@ -109,54 +108,36 @@ void AVoxelStaticWaterActor::BeginPlay()
 	{
 		WaterActivationManager = NewObject<UWaterActivationManager>(this, UWaterActivationManager::StaticClass(), TEXT("WaterActivationManager"));
 	}
-	
-	// Find shared VoxelIntegration from VoxelFluidActor to avoid duplicate terrain sampling
 	if (!VoxelIntegration)
 	{
-		if (UWorld* World = GetWorld())
+		VoxelIntegration = NewObject<UVoxelFluidIntegration>(this, UVoxelFluidIntegration::StaticClass(), TEXT("VoxelIntegration"));
+		UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Created own VoxelIntegration component"));
+	}
+	
+	// Configure our own VoxelIntegration with terrain layer settings
+	if (VoxelIntegration && TargetVoxelWorld && bUseTerrainAdaptiveMesh)
+	{
+		// Initialize the VoxelIntegration
+		VoxelIntegration->InitializeFluidSystem(TargetVoxelWorld);
+		
+		// Apply our terrain layer configuration
+		VoxelIntegration->bUseVoxelLayerSampling = bUseVoxelLayerSampling;
+		VoxelIntegration->SamplingMethod = SamplingMethod;
+		
+		// Configure for 3D terrain sampling without chunked system
+		VoxelIntegration->bUseChunkedSystem = false;  // Static water doesn't need fluid chunks
+		VoxelIntegration->bUse3DVoxelTerrain = true;
+		VoxelIntegration->bEnableCombinedSampling = bUseRuntimeVolumeLayer;
+		
+		// Set our terrain layer if specified
+		if (TerrainLayer.Layer != nullptr)
 		{
-			for (TActorIterator<AVoxelFluidActor> ActorItr(World); ActorItr; ++ActorItr)
-			{
-				AVoxelFluidActor* FluidActor = *ActorItr;
-				if (FluidActor && FluidActor->VoxelIntegration)
-				{
-					VoxelIntegration = FluidActor->VoxelIntegration;
-					UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Using shared VoxelIntegration from %s"), *FluidActor->GetName());
-					break;
-				}
-			}
+			VoxelIntegration->TerrainLayer = TerrainLayer;
+			UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Applied custom terrain layer to VoxelIntegration"));
 		}
 		
-		if (!VoxelIntegration)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: No VoxelFluidActor found, creating own VoxelIntegration"));
-			VoxelIntegration = NewObject<UVoxelFluidIntegration>(this, UVoxelFluidIntegration::StaticClass(), TEXT("VoxelIntegration"));
-		}
-		
-		// Configure VoxelIntegration with our terrain layer settings
-		if (VoxelIntegration && TargetVoxelWorld && bUseTerrainAdaptiveMesh)
-		{
-			// Initialize the VoxelIntegration if not already done
-			if (!VoxelIntegration->IsVoxelWorldValid())
-			{
-				VoxelIntegration->InitializeFluidSystem(TargetVoxelWorld);
-			}
-			
-			// Apply our terrain layer configuration
-			VoxelIntegration->bUseVoxelLayerSampling = bUseVoxelLayerSampling;
-			VoxelIntegration->SamplingMethod = SamplingMethod;
-			
-			// Set our terrain layer if specified
-			if (TerrainLayer.Layer != nullptr)
-			{
-				VoxelIntegration->TerrainLayer = TerrainLayer;
-				UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Applied custom terrain layer to shared VoxelIntegration"));
-			}
-			else
-			{
-				UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: No terrain layer specified - using VoxelFluidActor's layer"));
-			}
-		}
+		UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Initialized own VoxelIntegration (3D=%s, Combined=%s, SamplingMethod=%d)"), 
+			TEXT("Yes"), VoxelIntegration->bEnableCombinedSampling ? TEXT("Yes") : TEXT("No"), (int32)SamplingMethod);
 	}
 
 	if (bAutoInitialize)
@@ -259,25 +240,40 @@ void AVoxelStaticWaterActor::InitializeStaticWaterSystem()
 	}
 
 	// Initialize voxel integration
+	UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: InitializeStaticWaterSystem - VoxelIntegration=%s, TargetVoxelWorld=%s"), 
+		VoxelIntegration ? TEXT("Valid") : TEXT("Null"),
+		TargetVoxelWorld ? TEXT("Valid") : TEXT("Null"));
+	
 	if (VoxelIntegration && TargetVoxelWorld)
 	{
 		VoxelIntegration->InitializeFluidSystem(TargetVoxelWorld);
 		
 		// Configure runtime volume layer if enabled
-		if (bUseRuntimeVolumeLayer)
+		if (bUseRuntimeVolumeLayer && RuntimeVolumeLayer.Layer != nullptr)
 		{
 			VoxelIntegration->SetSecondaryVolumeLayer(RuntimeVolumeLayer);
-			VoxelIntegration->EnableCombinedSampling(true);
+			VoxelIntegration->EnableCombinedSampling(true); // Enable to check for runtime modifications
 			
-			// When using runtime volume layer, we need 3D voxel terrain to properly detect holes
-			VoxelIntegration->bUse3DVoxelTerrain = true;
+			// IMPORTANT: Don't use 3D terrain for initial height sampling!
+			// We use 2D height layer for mesh generation, 3D only for runtime solid detection
+			VoxelIntegration->bUse3DVoxelTerrain = false;  // Start with 2D heights
 			
-			// Configure the 3D terrain layer to match the base terrain layer
+			// Use BASE terrain layer for height sampling (2D height map)
 			if (TerrainLayer.Layer != nullptr)
 			{
-				VoxelIntegration->Terrain3DLayer = TerrainLayer;
-				VoxelIntegration->bUseSeparate3DLayer = true;
+				VoxelIntegration->TerrainLayer = TerrainLayer;  // 2D height layer
+				VoxelIntegration->bUseVoxelLayerSampling = bUseVoxelLayerSampling;
+				VoxelIntegration->SamplingMethod = SamplingMethod;
 			}
+			
+			// Store runtime volume layer for later 3D solid detection (when edits happen)
+			VoxelIntegration->Terrain3DLayer = RuntimeVolumeLayer;  // 3D volume for runtime edits
+			VoxelIntegration->bUseSeparate3DLayer = true;
+			
+			// Don't invert for 2D height sampling
+			VoxelIntegration->bInvertSolidDetection = false;
+			
+			UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Using 2D HEIGHT layer for mesh, 3D VOLUME layer ready for runtime edits"))
 			
 			UE_LOG(LogTemp, Log, TEXT("VoxelStaticWaterActor: Configured runtime volume layer with 3D terrain for modifications"));
 			
@@ -287,6 +283,30 @@ void AVoxelStaticWaterActor::InitializeStaticWaterSystem()
 				VoxelIntegration->Update3DVoxelTerrain();
 			}
 		}
+		else
+		{
+			// Not using runtime volume layer - use standard terrain layer configuration
+			if (TerrainLayer.Layer != nullptr)
+			{
+				VoxelIntegration->TerrainLayer = TerrainLayer;
+				VoxelIntegration->bUseVoxelLayerSampling = bUseVoxelLayerSampling;
+				VoxelIntegration->SamplingMethod = SamplingMethod;
+				
+				// For 3D terrain without runtime layer
+				if (VoxelIntegration->bUse3DVoxelTerrain)
+				{
+					VoxelIntegration->Terrain3DLayer = TerrainLayer;
+				}
+				
+				UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Using standard TerrainLayer configuration (no runtime edits)"));
+			}
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("VoxelStaticWaterActor: Cannot initialize VoxelIntegration - VoxelIntegration=%s, TargetVoxelWorld=%s"), 
+			VoxelIntegration ? TEXT("Valid") : TEXT("Null"),
+			TargetVoxelWorld ? TEXT("Valid") : TEXT("Null"));
 	}
 
 	// Set up voxel world connection
@@ -600,11 +620,27 @@ void AVoxelStaticWaterActor::OnVoxelTerrainModified(const FVector& ModifiedPosit
 	// Now update the voxel integration to refresh solid cells
 	if (VoxelIntegration)
 	{
-		// When using runtime volume layer with combined sampling, OnRuntimeTerrainModified handles everything
+		// Note: We keep using 2D height layer for mesh generation
+		// The 3D volume layer is only used for solid detection in fluid simulation
+		// This ensures water mesh stays at correct heights while detecting runtime edits
+		
+		// When using runtime volume layer with combined sampling, use appropriate method based on chunked system
 		if (bUseRuntimeVolumeLayer && VoxelIntegration->bEnableCombinedSampling)
 		{
-			// This will clear cache, update terrain region, and wake fluid
-			VoxelIntegration->OnRuntimeTerrainModified(ModifiedPosition, ModifiedRadius);
+			if (VoxelIntegration->bUseChunkedSystem)
+			{
+				// For chunked systems, use OnRuntimeTerrainModified
+				VoxelIntegration->OnRuntimeTerrainModified(ModifiedPosition, ModifiedRadius);
+			}
+			else
+			{
+				// For non-chunked systems, use simpler refresh method
+				VoxelIntegration->ForceRefreshVoxelCache();
+				VoxelIntegration->RefreshTerrainInRadius(ModifiedPosition, ModifiedRadius);
+				
+				UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Refreshed terrain for non-chunked system at %s with radius %.1f"), 
+					*ModifiedPosition.ToString(), ModifiedRadius);
+			}
 		}
 		else if (VoxelIntegration->bUse3DVoxelTerrain)
 		{
@@ -620,6 +656,9 @@ void AVoxelStaticWaterActor::OnVoxelTerrainModified(const FVector& ModifiedPosit
 			// For 2D terrain, just update the terrain heights
 			VoxelIntegration->UpdateTerrainHeights();
 		}
+		
+		// Critical: Refresh terrain data to propagate 3D terrain changes to mesh generation
+		VoxelIntegration->RefreshTerrainAfterSculpting();
 		
 		UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Triggered terrain update at %s radius %.1f (RuntimeLayer=%s, Combined=%s, 3D=%s)"), 
 			*ModifiedPosition.ToString(), ModifiedRadius,
@@ -647,6 +686,7 @@ void AVoxelStaticWaterActor::RefreshTerrainDataInRadius(const FVector& Center, f
 	if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
 	{
 		VoxelIntegration->RefreshTerrainInRadius(Center, Radius);
+		VoxelIntegration->RefreshTerrainAfterSculpting();
 	}
 }
 

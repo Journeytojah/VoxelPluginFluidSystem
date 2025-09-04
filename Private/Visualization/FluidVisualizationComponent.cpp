@@ -307,9 +307,9 @@ void UFluidVisualizationComponent::GenerateChunkedVisualization()
 		return;
 	}
 	
-	// Debug: Check if we have active chunks
-	const TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
-	UE_LOG(LogTemp, Warning, TEXT("FluidVisualizationComponent: Active chunks count: %d, RenderMode: %d"), ActiveChunks.Num(), (int32)RenderMode);
+	// // Debug: Check if we have active chunks
+	// const TArray<UFluidChunk*> ActiveChunks = ChunkManager->GetActiveChunks();
+	// UE_LOG(LogTemp, Warning, TEXT("FluidVisualizationComponent: Active chunks count: %d, RenderMode: %d"), ActiveChunks.Num(), (int32)RenderMode);
 	
 	SCOPE_CYCLE_COUNTER(STAT_VoxelFluid_Visualization);
 	
