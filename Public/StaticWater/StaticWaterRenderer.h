@@ -91,7 +91,7 @@ struct VOXELFLUIDSYSTEM_API FStaticWaterRenderSettings
 
 	// Mesh generation settings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mesh Generation", meta = (ClampMin = "10", ClampMax = "500"))
-	float MeshResolution = 200.0f; // Vertex spacing in cm - larger for performance
+	float MeshResolution = 50.0f; // Vertex spacing in cm - reduced from 200 for 4x better resolution
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mesh Generation")
 	bool bGenerateNormals = true;

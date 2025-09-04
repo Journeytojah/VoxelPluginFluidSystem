@@ -1611,17 +1611,95 @@ TArray<float> UVoxelFluidIntegration::SampleVoxelHeightsBatch(const TArray<FVect
 			for (int32 i = 0; i < FMath::Min(Heights.Num(), VolumeValues.Num()); i++)
 			{
 				// Volume layers: negative = solid, positive = empty/carved
+				// Use the volume value to create smooth transitions
 				if (VolumeValues[i] > 0.0f)  // Position has been carved out
 				{
-					// Lower the terrain height significantly to indicate a hole
-					Heights[i] -= 10000.0f;  // Push it way down so water flows in
+					// Create smooth depth based on how far into empty space we are
+					// Volume values typically range from -1 (solid) to +1 (empty)
+					// We'll map positive values to depth
+					float CarveDepth = FMath::Clamp(VolumeValues[i], 0.0f, 1.0f);
+					
+					// Create a smooth falloff - the more positive (empty), the deeper the carve
+					// Use a curve for natural-looking transitions
+					float DepthMultiplier = FMath::Pow(CarveDepth, 0.5f); // Square root for smoother transition
+					
+					// Apply depth relative to water level for natural flow
+					float MaxCarveDepth = 2000.0f; // Maximum depth to carve
+					Heights[i] -= MaxCarveDepth * DepthMultiplier;
 					
 					if (i < 10)  // Log first few for debugging
 					{
-						UE_LOG(LogTemp, VeryVerbose, TEXT("Position %d carved: Volume=%.1f, Height adjusted from %.1f to %.1f"), 
-							i, VolumeValues[i], Heights[i] + 10000.0f, Heights[i]);
+						UE_LOG(LogTemp, VeryVerbose, TEXT("Position %d carved: Volume=%.2f, DepthMult=%.2f, Height adjusted by %.1f"), 
+							i, VolumeValues[i], DepthMultiplier, -MaxCarveDepth * DepthMultiplier);
 					}
 				}
+				else if (VolumeValues[i] > -0.2f && VolumeValues[i] <= 0.0f)
+				{
+					// Near the edge of solid terrain - create a gentle slope
+					// This helps water flow naturally into carved areas
+					float EdgeBlend = (VolumeValues[i] + 0.2f) / 0.2f; // 0 at -0.2, 1 at 0
+					float SlopeDepth = 200.0f * (1.0f - EdgeBlend); // Gentle slope into carved area
+					Heights[i] -= SlopeDepth;
+				}
+			}
+			
+			// Optional: Apply a smoothing pass to create even smoother transitions
+			// This helps eliminate sharp edges between carved and uncarved areas
+			if (Heights.Num() == 4096) // 64x64 grid
+			{
+				TArray<float> SmoothedHeights = Heights;
+				const int32 GridSize = 64;
+				
+				for (int32 y = 1; y < GridSize - 1; y++)
+				{
+					for (int32 x = 1; x < GridSize - 1; x++)
+					{
+						int32 Index = y * GridSize + x;
+						
+						// Only smooth areas near carve boundaries (where we modified heights)
+						if (FMath::Abs(Heights[Index] - SmoothedHeights[Index]) < 0.1f)
+						{
+							continue; // Skip unmodified areas
+						}
+						
+						// 3x3 gaussian-like smooth
+						float Sum = Heights[Index] * 4.0f; // Center weight
+						float Weight = 4.0f;
+						
+						// Adjacent cells
+						int32 Neighbors[4] = {
+							(y-1) * GridSize + x,   // Top
+							(y+1) * GridSize + x,   // Bottom
+							y * GridSize + (x-1),   // Left
+							y * GridSize + (x+1)    // Right
+						};
+						
+						for (int32 n : Neighbors)
+						{
+							Sum += Heights[n] * 2.0f;
+							Weight += 2.0f;
+						}
+						
+						// Diagonal cells (less weight)
+						int32 Diagonals[4] = {
+							(y-1) * GridSize + (x-1), // Top-left
+							(y-1) * GridSize + (x+1), // Top-right
+							(y+1) * GridSize + (x-1), // Bottom-left
+							(y+1) * GridSize + (x+1)  // Bottom-right
+						};
+						
+						for (int32 d : Diagonals)
+						{
+							Sum += Heights[d];
+							Weight += 1.0f;
+						}
+						
+						SmoothedHeights[Index] = Sum / Weight;
+					}
+				}
+				
+				Heights = SmoothedHeights;
+				UE_LOG(LogTemp, VeryVerbose, TEXT("Applied smoothing pass to terrain heights"));
 			}
 			
 			UE_LOG(LogTemp, Warning, TEXT("SampleVoxelHeightsBatch: Processed %d positions with runtime modifications"), VolumeValues.Num());

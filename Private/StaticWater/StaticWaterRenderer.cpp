@@ -732,8 +732,8 @@ bool UStaticWaterRenderer::ShouldUnloadRenderChunk(const FIntVector& ChunkCoord)
 
 void UStaticWaterRenderer::BuildChunkMesh(FStaticWaterRenderChunk& Chunk)
 {
-	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: BuildChunkMesh called for chunk (%d, %d)"), 
-		Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y);
+	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: 🔨 BuildChunkMesh called for chunk (%d, %d) at %s"), 
+		Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y, *Chunk.WorldBounds.GetCenter().ToString());
 		
 	if (!WaterGenerator || !Chunk.MeshComponent || !Chunk.MeshComponent->IsValidLowLevel())
 		return;
@@ -790,18 +790,44 @@ void UStaticWaterRenderer::BuildChunkMesh(FStaticWaterRenderChunk& Chunk)
 		return;
 	}
 	
+	// Check if water exists at this location
 	bool bHasWater = WaterGenerator->HasStaticWaterAtLocation(ChunkCenter);
+	float WaterLevel = WaterGenerator->GetWaterLevelAtLocation(ChunkCenter);
+	
+	// Log for debugging
+	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: BuildChunkMesh - Chunk (%d,%d) at %s - HasWater: %s, WaterLevel: %.1f"), 
+		Chunk.ChunkCoord.X, Chunk.ChunkCoord.Y, *ChunkCenter.ToString(),
+		bHasWater ? TEXT("YES") : TEXT("NO"), WaterLevel);
+	
+	// Basic validation - only reject if water level is completely invalid
+	if (bHasWater && (WaterLevel < -99000.0f || WaterLevel > 99000.0f))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Rejecting chunk - invalid water level"));
+		bHasWater = false;
+	}
 	
 	// Always log water checks to debug the issue
 	UE_LOG(LogTemp, Log, TEXT("StaticWaterRenderer: Checking water at chunk center %s: %s"), 
 		*ChunkCenter.ToString(), bHasWater ? TEXT("HAS WATER") : TEXT("NO WATER"));
 	
-	// Debug: Also check the water level
+	// Additional validation: Check if water level makes sense
 	if (bHasWater)
 	{
-		float WaterLevel = WaterGenerator->GetWaterLevelAtLocation(ChunkCenter);
-		UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: ✅ FOUND WATER at %s, level: %.1f"), 
-			*ChunkCenter.ToString(), WaterLevel);
+		// WaterLevel already declared above, just reuse it
+		WaterLevel = WaterGenerator->GetWaterLevelAtLocation(ChunkCenter);
+		
+		// Sanity check - if water level is extremely low or high, it might be invalid
+		if (WaterLevel < -10000.0f || WaterLevel > 10000.0f)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Invalid water level %.1f at %s - skipping chunk"), 
+				WaterLevel, *ChunkCenter.ToString());
+			bHasWater = false;
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: ✅ FOUND WATER at %s, level: %.1f"), 
+				*ChunkCenter.ToString(), WaterLevel);
+		}
 	}
 	
 	if (!bHasWater)
@@ -998,11 +1024,20 @@ void UStaticWaterRenderer::GenerateAdaptiveWaterMesh(FStaticWaterRenderChunk& Ch
 {
 	// Generate terrain-adaptive water mesh that culls triangles above terrain
 	const FBox& Bounds = Chunk.WorldBounds;
-	const float Resolution = RenderSettings.MeshResolution;
+	
+	// Adaptive resolution - use finer resolution for better water edge quality
+	float Resolution = RenderSettings.MeshResolution;
+	
+	// Further reduce resolution for even smoother edges (higher vertex density)
+	// This gives us approximately 256 vertices per side with 50cm resolution
+	Resolution = FMath::Min(Resolution, 50.0f);
+	
 	const float WaterLevel = Chunk.WaterLevel;
 	
 	// Use higher resolution for LOD0 adaptive meshes
-	const int32 VertsPerSide = FMath::Max(16, FMath::CeilToInt(RenderSettings.RenderChunkSize / Resolution));
+	// Ensure higher resolution mesh with more vertices for smoother water edges
+	// Increased minimum from 16 to 32 for better quality, max of 256 for performance
+	const int32 VertsPerSide = FMath::Clamp(FMath::CeilToInt(RenderSettings.RenderChunkSize / Resolution), 32, 256);
 	const float StepSize = RenderSettings.RenderChunkSize / (VertsPerSide - 1);
 	
 	if (bEnableLogging)
@@ -1088,35 +1123,196 @@ void UStaticWaterRenderer::GenerateAdaptiveWaterMesh(FStaticWaterRenderChunk& Ch
 			// Store the terrain height for later use when creating triangles
 			VertexTerrainHeights.Add(TerrainHeight);
 			
-			// Position water surface based on terrain - allow penetration near edges
-			float WaterSurfaceHeight;
-			const float EdgePenetration = RenderSettings.EdgePenetrationDepth; // Configurable penetration depth
-			const float TransitionZone = 50.0f; // 50cm transition zone
+			// Water leveling with smooth transitions at edges
+			float WaterSurfaceHeight = WaterLevel;
 			
-			if (TerrainHeight < WaterLevel - TransitionZone) // Terrain well below water level
+			// Calculate how much the terrain is above water level
+			float TerrainAboveWater = TerrainHeight - WaterLevel;
+			
+			// Create smooth transition zones with more aggressive overshoot into terrain
+			if (TerrainAboveWater > 50.0f)  // Terrain is well above water - increased threshold
 			{
-				// Place water surface at water level (proper water body)
-				WaterSurfaceHeight = WaterLevel;
+				// Mark as invalid - no water should be here
+				WaterSurfaceHeight = -99999.0f;
 			}
-			else if (TerrainHeight < WaterLevel + EdgePenetration) // Near terrain edge (including slight penetration)
+			else if (TerrainAboveWater > -50.0f)  // Wider transition zone: -50cm to +50cm for more overshoot
 			{
-				// Gradual transition - water can penetrate slightly into terrain
-				float PenetrationRatio = (TerrainHeight - (WaterLevel - TransitionZone)) / (TransitionZone + EdgePenetration);
-				PenetrationRatio = FMath::Clamp(PenetrationRatio, 0.0f, 1.0f);
+				// Smooth falloff at water edges with more aggressive push into terrain
+				// Map the range [-50, 50] to [1, 0] for smooth blending
+				float TransitionRange = 100.0f;  // Much wider transition distance for overshoot
+				float NormalizedHeight = (TerrainAboveWater + 50.0f) / TransitionRange;
+				NormalizedHeight = FMath::Clamp(NormalizedHeight, 0.0f, 1.0f);
 				
-				// At edges, allow water to go slightly below terrain surface
-				float EdgeWaterHeight = FMath::Lerp(WaterLevel, TerrainHeight - EdgePenetration, PenetrationRatio);
-				WaterSurfaceHeight = FMath::Max(EdgeWaterHeight, TerrainHeight - EdgePenetration);
+				// Use a more aggressive curve for water to push into terrain
+				// Power of 3 creates more aggressive overshoot while maintaining smoothness
+				float FalloffFactor = 1.0f - FMath::Pow(NormalizedHeight, 3.0f);
+				
+				// Apply the falloff - water can drop more to flow into carved areas
+				// Increased drop from 15 to 30 for more aggressive flow
+				WaterSurfaceHeight = WaterLevel - (1.0f - FalloffFactor) * 30.0f;
+				
+				// Allow water to get closer to terrain for better coverage
+				// Reduced clearance from 5 to 2 units
+				if (WaterSurfaceHeight > TerrainHeight - 2.0f)
+				{
+					WaterSurfaceHeight = -99999.0f;
+				}
 			}
-			else
-			{
-				// Terrain too high - no water here
-				WaterSurfaceHeight = TerrainHeight - 100.0f; // Well below terrain so triangles get culled
-			}
+			// else: terrain is well below water, keep water at its natural level
 			
 			TempVertices.Add(FVector(WorldX, WorldY, WaterSurfaceHeight));
 			TempUVs.Add(FVector2D((float)X / (VertsPerSide - 1), (float)Y / (VertsPerSide - 1)));
 			TempNormals.Add(FVector(0, 0, 1));
+		}
+	}
+	
+	// Apply smoothing pass to vertex heights for more natural water flow
+	// This helps eliminate harsh diagonal patterns
+	TArray<float> SmoothedHeights;
+	SmoothedHeights.SetNum(TempVertices.Num());
+	for (int32 i = 0; i < TempVertices.Num(); i++)
+	{
+		SmoothedHeights[i] = TempVertices[i].Z;
+	}
+	
+	// Apply multiple smoothing iterations for smoother results
+	const int32 SmoothIterations = 2;
+	for (int32 Iter = 0; Iter < SmoothIterations; Iter++)
+	{
+		TArray<float> NewHeights = SmoothedHeights;
+		
+		for (int32 Y = 1; Y < VertsPerSide - 1; ++Y)
+		{
+			for (int32 X = 1; X < VertsPerSide - 1; ++X)
+			{
+				const int32 Index = Y * VertsPerSide + X;
+				const float TerrainHeight = VertexTerrainHeights[Index];
+				
+				// Only smooth valid water vertices (not marked as invalid)
+				if (SmoothedHeights[Index] > -99000.0f)
+				{
+					// Sample neighboring heights for smoothing
+					float NeighborSum = 0.0f;
+					float NeighborWeight = 0.0f;
+					
+					// 3x3 kernel with distance-based weights
+					for (int32 DY = -1; DY <= 1; DY++)
+					{
+						for (int32 DX = -1; DX <= 1; DX++)
+						{
+							const int32 NeighborIndex = (Y + DY) * VertsPerSide + (X + DX);
+							const float NeighborTerrain = VertexTerrainHeights[NeighborIndex];
+							
+							// Only include neighbors that are also water
+							if (SmoothedHeights[NeighborIndex] > NeighborTerrain - 50.0f)
+							{
+								float Weight = (DX == 0 && DY == 0) ? 4.0f : (FMath::Abs(DX) + FMath::Abs(DY) == 1 ? 2.0f : 1.0f);
+								NeighborSum += SmoothedHeights[NeighborIndex] * Weight;
+								NeighborWeight += Weight;
+							}
+						}
+					}
+					
+					if (NeighborWeight > 0.0f)
+					{
+						// Blend with original height to preserve some detail
+						float SmoothedHeight = FMath::Lerp(SmoothedHeights[Index], NeighborSum / NeighborWeight, 0.5f);
+						
+						// IMPORTANT: Don't let water climb above its natural level!
+						// Water finds its level and stays flat
+						if (SmoothedHeight > WaterLevel + 25.0f) // Allow tiny meniscus
+						{
+							SmoothedHeight = FMath::Min(SmoothedHeight, WaterLevel);
+						}
+						
+						NewHeights[Index] = SmoothedHeight;
+					}
+				}
+			}
+		}
+		
+		SmoothedHeights = NewHeights;
+	}
+	
+	// Apply smoothed heights back to vertices
+	for (int32 i = 0; i < TempVertices.Num(); i++)
+	{
+		TempVertices[i].Z = SmoothedHeights[i];
+	}
+	
+	// Add subtle horizontal displacement to break up grid pattern at water edges
+	for (int32 Y = 1; Y < VertsPerSide - 1; ++Y)
+	{
+		for (int32 X = 1; X < VertsPerSide - 1; ++X)
+		{
+			const int32 Index = Y * VertsPerSide + X;
+			const float TerrainHeight = VertexTerrainHeights[Index];
+			const float WaterHeight = TempVertices[Index].Z;
+			
+			// Check if this vertex is near a water edge
+			bool bIsNearEdge = false;
+			for (int32 DY = -1; DY <= 1; DY++)
+			{
+				for (int32 DX = -1; DX <= 1; DX++)
+				{
+					if (DX == 0 && DY == 0) continue;
+					const int32 NeighborIndex = (Y + DY) * VertsPerSide + (X + DX);
+					const float NeighborTerrain = VertexTerrainHeights[NeighborIndex];
+					
+					// Check if neighbor is above water while we're at water level
+					if (WaterHeight > TerrainHeight - 50.0f && NeighborTerrain > WaterLevel + 100.0f)
+					{
+						bIsNearEdge = true;
+						break;
+					}
+				}
+				if (bIsNearEdge) break;
+			}
+			
+			// Apply small displacement at edges to create more organic boundaries
+			if (bIsNearEdge)
+			{
+				// Use position-based pseudo-random offset
+				float Hash = FMath::Frac(FMath::Sin(Index * 12.9898f + Y * 78.233f) * 43758.5453f);
+				float DisplacementX = (Hash - 0.5f) * StepSize * 0.15f; // 15% of grid size max
+				Hash = FMath::Frac(FMath::Sin(Index * 45.233f + X * 12.898f) * 93758.5453f);
+				float DisplacementY = (Hash - 0.5f) * StepSize * 0.15f;
+				
+				TempVertices[Index].X += DisplacementX;
+				TempVertices[Index].Y += DisplacementY;
+			}
+		}
+	}
+	
+	// Recalculate normals based on smoothed vertex positions
+	for (int32 Y = 0; Y < VertsPerSide; ++Y)
+	{
+		for (int32 X = 0; X < VertsPerSide; ++X)
+		{
+			const int32 Index = Y * VertsPerSide + X;
+			FVector Normal = FVector(0, 0, 1); // Default up normal
+			
+			// Calculate normal from neighboring vertices for smoother shading
+			if (X > 0 && X < VertsPerSide - 1 && Y > 0 && Y < VertsPerSide - 1)
+			{
+				const FVector& Center = TempVertices[Index];
+				const FVector& Left = TempVertices[Index - 1];
+				const FVector& Right = TempVertices[Index + 1];
+				const FVector& Up = TempVertices[Index - VertsPerSide];
+				const FVector& Down = TempVertices[Index + VertsPerSide];
+				
+				// Calculate two tangent vectors
+				FVector TangentX = (Right - Left).GetSafeNormal();
+				FVector TangentY = (Down - Up).GetSafeNormal();
+				
+				// Cross product gives normal
+				Normal = FVector::CrossProduct(TangentX, TangentY).GetSafeNormal();
+				
+				// Ensure normal points up
+				if (Normal.Z < 0) Normal *= -1.0f;
+			}
+			
+			TempNormals[Index] = Normal;
 		}
 	}
 	
@@ -1134,41 +1330,131 @@ void UStaticWaterRenderer::GenerateAdaptiveWaterMesh(FStaticWaterRenderChunk& Ch
 			const float TerrainHeight3 = VertexTerrainHeights[NextRowIndex];
 			const float TerrainHeight4 = VertexTerrainHeights[NextRowIndex + 1];
 			
-			// Create triangles where water should exist (including edge penetration)
+			// Water stays level - only create triangles where terrain is actually below water
 			int32 ValidWaterCorners = 0;
-			const float EdgePenetration = RenderSettings.EdgePenetrationDepth; // Configurable penetration
-			const float WaterThreshold = WaterLevel + EdgePenetration; // Allow slight penetration
+			const float WaterThreshold = WaterLevel + 50.0f; // Small tolerance for meniscus
 			
-			// Count corners where water is valid (including penetration zone)
+			// Count corners where terrain is below water level
 			if (TerrainHeight1 < WaterThreshold) ValidWaterCorners++;
 			if (TerrainHeight2 < WaterThreshold) ValidWaterCorners++;
 			if (TerrainHeight3 < WaterThreshold) ValidWaterCorners++;
 			if (TerrainHeight4 < WaterThreshold) ValidWaterCorners++;
 			
-			const bool bHasWater = ValidWaterCorners >= 2; // At least half the corners must be in valid water zone
+			// Check for our special marker indicating "no water here"
+			const bool bVertex1Valid = TempVertices[VertIndex].Z > -90000.0f;
+			const bool bVertex2Valid = TempVertices[VertIndex + 1].Z > -90000.0f;
+			const bool bVertex3Valid = TempVertices[NextRowIndex].Z > -90000.0f;
+			const bool bVertex4Valid = TempVertices[NextRowIndex + 1].Z > -90000.0f;
+			
+			// Only create triangles if we have enough valid vertices
+			// We need at least 3 valid vertices to form a triangle
+			int32 ValidVertexCount = 0;
+			if (bVertex1Valid) ValidVertexCount++;
+			if (bVertex2Valid) ValidVertexCount++;
+			if (bVertex3Valid) ValidVertexCount++;
+			if (bVertex4Valid) ValidVertexCount++;
+			
+			// Need terrain below water AND valid vertex heights
+			const bool bHasWater = ValidWaterCorners >= 2 && ValidVertexCount >= 3;
 			
 			if (bHasWater)
 			{
-				// Create two triangles per quad
-				// Triangle 1
-				TempTriangles.Add(VertIndex);
-				TempTriangles.Add(NextRowIndex);
-				TempTriangles.Add(VertIndex + 1);
+				// Create triangles only with valid vertices
+				// Check each triangle individually
 				
-				// Triangle 2  
-				TempTriangles.Add(VertIndex + 1);
-				TempTriangles.Add(NextRowIndex);
-				TempTriangles.Add(NextRowIndex + 1);
+				// Triangle 1: vertices 1, 3, 2
+				if (bVertex1Valid && bVertex3Valid && bVertex2Valid)
+				{
+					TempTriangles.Add(VertIndex);
+					TempTriangles.Add(NextRowIndex);
+					TempTriangles.Add(VertIndex + 1);
+				}
+				
+				// Triangle 2: vertices 2, 3, 4
+				if (bVertex2Valid && bVertex3Valid && bVertex4Valid)
+				{
+					TempTriangles.Add(VertIndex + 1);
+					TempTriangles.Add(NextRowIndex);
+					TempTriangles.Add(NextRowIndex + 1);
+				}
+				// If one triangle is invalid but we have 3 valid verts, try alternate triangulation
+				else if (!bVertex4Valid && bVertex1Valid && bVertex2Valid && bVertex3Valid)
+				{
+					// Can still make one triangle with vertices 1, 2, 3
+					// Already added as Triangle 1
+				}
+				else if (!bVertex1Valid && bVertex2Valid && bVertex3Valid && bVertex4Valid)
+				{
+					// Make one triangle with vertices 2, 3, 4
+					TempTriangles.Add(VertIndex + 1);
+					TempTriangles.Add(NextRowIndex);
+					TempTriangles.Add(NextRowIndex + 1);
+				}
 			}
 		}
 	}
 	
-	// Store the generated mesh data
-	Chunk.Vertices = TempVertices;
-	Chunk.Triangles = TempTriangles;
-	Chunk.Normals = TempNormals;
-	Chunk.UVs = TempUVs;
-	Chunk.bHasWater = TempTriangles.Num() > 0; // Only has water if we have triangles
+	// Before storing, check if this chunk has a valid water source nearby
+	// This prevents isolated water from spawning in dry areas
+	bool bHasValidWaterSource = false;
+	if (TempTriangles.Num() > 0)
+	{
+		// Check if any significant portion of the chunk is below water level
+		int32 VerticesBelowWater = 0;
+		int32 ValidVertices = 0;
+		
+		for (int32 i = 0; i < TempVertices.Num(); i++)
+		{
+			// Skip invalid vertices
+			if (TempVertices[i].Z > -90000.0f)
+			{
+				ValidVertices++;
+				if (VertexTerrainHeights.IsValidIndex(i))
+				{
+					// Check if terrain is below water level with some tolerance
+					if (VertexTerrainHeights[i] < WaterLevel - 10.0f)
+					{
+						VerticesBelowWater++;
+					}
+				}
+			}
+		}
+		
+		// Need at least 5% of valid vertices to be below water to consider this a water area
+		// Reduced threshold for better overshoot into carved areas
+		float WaterCoverage = ValidVertices > 0 ? (float)VerticesBelowWater / (float)ValidVertices : 0.0f;
+		bHasValidWaterSource = WaterCoverage > 0.05f;  // Reduced from 0.1f to 0.05f
+		
+		// Additional check: if we have very few triangles compared to potential area, likely isolated
+		int32 MaxPossibleTriangles = (VertsPerSide - 1) * (VertsPerSide - 1) * 2;
+		float TriangleDensity = (float)(TempTriangles.Num() / 3) / (float)MaxPossibleTriangles;
+		
+		// If triangle density is too low, likely just isolated water pockets
+		// Reduced threshold to allow more aggressive water flow
+		if (TriangleDensity < 0.02f)  // Reduced from 5% to 2% coverage
+		{
+			bHasValidWaterSource = false;
+		}
+	}
+	
+	// Store the generated mesh data only if we have a valid water source
+	if (bHasValidWaterSource)
+	{
+		Chunk.Vertices = TempVertices;
+		Chunk.Triangles = TempTriangles;
+		Chunk.Normals = TempNormals;
+		Chunk.UVs = TempUVs;
+		Chunk.bHasWater = true;
+	}
+	else
+	{
+		// Clear the chunk - no valid water here
+		Chunk.Vertices.Empty();
+		Chunk.Triangles.Empty();
+		Chunk.Normals.Empty();
+		Chunk.UVs.Empty();
+		Chunk.bHasWater = false;
+	}
 	
 	// Always log adaptive mesh generation for debugging
 	UE_LOG(LogTemp, Warning, TEXT("StaticWaterRenderer: Generated ADAPTIVE mesh for chunk (%d, %d) with %d vertices, %d triangles, HasWater: %s"), 

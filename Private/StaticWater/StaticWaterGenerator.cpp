@@ -195,7 +195,18 @@ void UStaticWaterGenerator::OnTerrainChanged(const FBox& ChangedBounds)
 bool UStaticWaterGenerator::HasStaticWaterAtLocation(const FVector& WorldPosition) const
 {
 	float WaterLevel;
-	return EvaluateWaterAtPosition(WorldPosition, WaterLevel);
+	bool bInRegion = EvaluateWaterAtPosition(WorldPosition, WaterLevel);
+	
+	// Debug logging to see what's happening
+	if (bInRegion)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("StaticWaterGenerator: Position %s is in water region, WaterLevel=%.1f, Pos.Z=%.1f"), 
+			*WorldPosition.ToString(), WaterLevel, WorldPosition.Z);
+	}
+	
+	// For now, just return if we're in a region - don't do height checks here
+	// The height check should be done by the caller if needed
+	return bInRegion;
 }
 
 float UStaticWaterGenerator::GetWaterLevelAtLocation(const FVector& WorldPosition) const

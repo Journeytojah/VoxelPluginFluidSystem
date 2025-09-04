@@ -451,6 +451,8 @@ void AVoxelStaticWaterActor::CreateOcean(float WaterLevel, float Size)
 
 void AVoxelStaticWaterActor::CreateTestOcean()
 {
+	UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Creating test ocean with level %.1f and size %.1f"), 
+		OceanWaterLevel, OceanSize);
 	CreateOcean(OceanWaterLevel, OceanSize);
 }
 
@@ -564,7 +566,21 @@ bool AVoxelStaticWaterActor::IsPointInStaticWater(const FVector& WorldPosition) 
 		return false;
 	}
 
-	return StaticWaterGenerator->HasStaticWaterAtLocation(WorldPosition);
+	// Check if we have water at this location
+	bool bHasWater = StaticWaterGenerator->HasStaticWaterAtLocation(WorldPosition);
+	
+	// Additional check: ensure we're actually below or near water level
+	if (bHasWater)
+	{
+		float WaterLevel = GetWaterLevelAtPosition(WorldPosition);
+		// Only consider it "in water" if we're within reasonable distance of water surface
+		if (WorldPosition.Z > WaterLevel + 500.0f) // More than 5 meters above water
+		{
+			return false;
+		}
+	}
+	
+	return bHasWater;
 }
 
 float AVoxelStaticWaterActor::GetWaterLevelAtPosition(const FVector& WorldPosition) const
@@ -614,6 +630,124 @@ void AVoxelStaticWaterActor::OnTerrainEdited(const FVector& EditPosition, float 
 
 void AVoxelStaticWaterActor::OnVoxelTerrainModified(const FVector& ModifiedPosition, float ModifiedRadius)
 {
+	// CRITICAL: Only process if there's actually water nearby
+	// This prevents water from spawning when digging on dry land
+	
+	UE_LOG(LogTemp, Warning, TEXT("=== OnVoxelTerrainModified called at %s, radius %.1f ==="), 
+		*ModifiedPosition.ToString(), ModifiedRadius);
+	
+	bool bHasWaterNearby = false;
+	int32 WaterSamples = 0; // Move this outside the if block
+	
+	// Check if there's any static water in the area
+	if (StaticWaterGenerator)
+	{
+		// We need to check in a radius around the edit position for actual water
+		// Not just if we're in a water region, but if water actually exists nearby
+		float CheckRadius = ModifiedRadius + 1000.0f; // Add 10 meter buffer for water flow
+		
+		// Sample multiple points at different distances to find actual water
+		const int32 NumAngles = 8;
+		const int32 NumDistances = 3;
+		
+		// Check at multiple distances: near, mid, and far
+		float Distances[3] = {
+			ModifiedRadius * 0.5f,           // Half the edit radius
+			ModifiedRadius * 1.0f,           // At the edit radius  
+			CheckRadius                      // At the check radius (with buffer)
+		};
+		
+		for (int32 d = 0; d < NumDistances; d++)
+		{
+			float Distance = Distances[d];
+			
+			for (int32 i = 0; i < NumAngles; i++)
+			{
+				float Angle = (2.0f * PI * i) / NumAngles;
+				FVector SamplePoint = ModifiedPosition + FVector(
+					FMath::Cos(Angle) * Distance,
+					FMath::Sin(Angle) * Distance,
+					0.0f
+				);
+				
+				// Check if this sample point has water
+				float WaterLevel = GetWaterLevelAtPosition(SamplePoint);
+				if (WaterLevel > -99999.0f)
+				{
+					// Check if terrain at this point is actually underwater
+					// We need to sample terrain height here too
+					if (VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
+					{
+						float TerrainHeight = VoxelIntegration->SampleVoxelHeight(SamplePoint.X, SamplePoint.Y);
+						
+						// Water exists here if terrain is below water level
+						if (TerrainHeight < WaterLevel - 50.0f) // 50cm below water
+						{
+							WaterSamples++;
+							
+							// If we find water close by, that's more important
+							if (Distance <= ModifiedRadius)
+							{
+								UE_LOG(LogTemp, Warning, TEXT("🌊 Found water WITHIN edit radius at %s (Terrain: %.1f, Water: %.1f)"), 
+									*SamplePoint.ToString(), TerrainHeight, WaterLevel);
+								// Early exit - definitely has water nearby
+								bHasWaterNearby = true;
+								break;
+							}
+							else
+							{
+								UE_LOG(LogTemp, Warning, TEXT("Found water at distance %.1f from edit: %s"), 
+									Distance, *SamplePoint.ToString());
+							}
+						}
+					}
+				}
+			}
+			
+			// If we found water within the edit radius, no need to check further
+			if (bHasWaterNearby)
+				break;
+		}
+		
+		// Also check the center point itself
+		float CenterWaterLevel = GetWaterLevelAtPosition(ModifiedPosition);
+		if (CenterWaterLevel > -99999.0f && VoxelIntegration && VoxelIntegration->IsVoxelWorldValid())
+		{
+			float CenterTerrainHeight = VoxelIntegration->SampleVoxelHeight(ModifiedPosition.X, ModifiedPosition.Y);
+			if (CenterTerrainHeight < CenterWaterLevel - 50.0f)
+			{
+				WaterSamples++;
+				UE_LOG(LogTemp, Warning, TEXT("Found water at center %s (Terrain: %.1f, Water: %.1f)"), 
+					*ModifiedPosition.ToString(), CenterTerrainHeight, CenterWaterLevel);
+			}
+		}
+		
+		// If we didn't already find water, check if we found any samples
+		if (!bHasWaterNearby)
+		{
+			// Need at least 2 water samples in the buffer zone to consider water "nearby"
+			// This prevents isolated puddles from triggering water generation
+			bHasWaterNearby = (WaterSamples >= 2);
+		}
+		
+		UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: Water proximity check - %d total water samples found (threshold: 2)"), 
+			WaterSamples);
+	}
+	
+	// If no water found in the radius, block the update
+	// We require ACTUAL water nearby, not just being in an ocean region
+	if (!bHasWaterNearby)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: ✅ BLOCKED - no actual water found within %.1f units"), 
+			ModifiedRadius + 1000.0f);
+		return;
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("VoxelStaticWaterActor: ⚠️ ALLOWING - found %d water samples within radius"), 
+			WaterSamples);
+	}
+	
 	// First handle dynamic water activation if needed
 	OnTerrainEdited(ModifiedPosition, ModifiedRadius, MinDisturbanceForActivation + 1.0f);
 	
